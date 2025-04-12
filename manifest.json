@@ -1,0 +1,12 @@
+{
+	"display_name": "OpenRouterKeySwitcher",
+	"loading_order": 100,
+	"requires": [],
+	"optional": [],
+	"js": "OpenRouterKeySwitcher.js",
+	"css": "",
+	"author": "SillyTavern User",
+	"version": "0.0.1",
+	"homePage": "https://github.com/",
+	"auto_update": true
+}
