@@ -616,9 +616,6 @@ jQuery(async () => {
             buttonContainer.style.marginTop = "10px";
 
             // Create buttons (using provider context)
-            // Note: Removed "Save Keys" button as textarea now saves on change
-            // const saveKeysButton = await createButton("Save Keys", async () => { ... }); // Removed
-
             const keySwitchingButton = await createButton("Toggle Switching", async () => {
                 keySwitchingEnabled[provider.secret_key] = !keySwitchingEnabled[provider.secret_key];
                 localStorage.setItem(`switch_key_${provider.secret_key}`, keySwitchingEnabled[provider.secret_key].toString());
@@ -643,7 +640,6 @@ jQuery(async () => {
 
 
             // Append buttons to container
-            // buttonContainer.appendChild(saveKeysButton); // Removed
             buttonContainer.appendChild(keySwitchingButton);
             buttonContainer.appendChild(rotateManuallyButton); // Added manual rotate
             buttonContainer.appendChild(viewErrorButton);
@@ -651,7 +647,6 @@ jQuery(async () => {
 
 
              // Inject elements into the form
-             // Try inserting before a specific element or appending
              const insertBeforeElement = formElement.querySelector('hr, button, .form_section_block'); // Find a suitable insertion point
              if (insertBeforeElement) {
                  formElement.insertBefore(infoPanel, insertBeforeElement);
@@ -670,52 +665,32 @@ jQuery(async () => {
         }
     }
 
-    // Setup generic event listeners - might need refinement
-    // Example: Trigger rotation check when settings are loaded/changed
-    // scriptFunctions.eventSource.on(scriptFunctions.event_types.SETTINGS_UPDATED, async () => {
-    //     console.log("Settings updated, potentially re-evaluating key rotation needs.");
-        // Check active provider and potentially call handleKeyRotation if conditions met
-    // });
-
-    // Add listeners specific to API changes if possible
-    // scriptFunctions.eventSource.on(scriptFunctions.event_types.API_CHANGED, async (apiType) => {
-    //     const provider = Object.values(PROVIDERS).find(p => p.some_identifier === apiType);
-    //     if (provider) {
-    //         await handleKeyRotation(provider.secret_key); // Example trigger
-    //     }
-    // });
-
-    // Model change listener - adapt if necessary for non-OpenRouter providers
+    // Model change listener
     scriptFunctions.eventSource.on(scriptFunctions.event_types.CHATCOMPLETION_MODEL_CHANGED, async (model) => {
          for (const provider of Object.values(PROVIDERS)) {
             if (isProviderSource(provider)) {
-                 // Potentially save model or perform actions specific to this provider
                  console.log(`${provider.name} model changed to: ${model}`);
-                 // Example: await saveKey(`${provider.secret_key}_model`, model);
                  break;
             }
          }
     });
 
-    // Add listener for automatic key rotation before chat completion requests
+    // Automatic rotation listener
     scriptFunctions.eventSource.on(scriptFunctions.event_types.CHAT_COMPLETION_SETTINGS_READY, async () => {
         console.log("Chat completion settings ready, checking for key rotation...");
-        // Log current source setting
         const currentSource = oaiFunctions.oai_settings.chat_completion_source;
         console.log(`Current chat_completion_source: ${currentSource}`);
 
         for (const provider of Object.values(PROVIDERS)) {
              const isActive = isProviderSource(provider);
-             // Log check result for each provider
              console.log(`Checking provider ${provider.name}: isActive = ${isActive}`);
 
             if (isActive) {
-                // Check if key switching is enabled for this provider before rotating
                 if (keySwitchingEnabled[provider.secret_key]) {
                     console.log(`Provider ${provider.name} is active and switching is enabled. Attempting key rotation.`);
                     await handleKeyRotation(provider.secret_key);
                 }
-                 break; // Process only the active provider
+                 break;
             }
         }
     });
@@ -724,5 +699,4 @@ jQuery(async () => {
 });
 
 // Export the plugin's init function
-export default exports.default; 
 export default exports.default; 
