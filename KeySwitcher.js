@@ -132,8 +132,7 @@ const PROVIDER_ERROR_MAPPINGS = {
             413: "Request Too Large: Request exceeds the maximum size.",
             429: "Rate Limit Error: Your account has hit a rate limit.",
             500: "API Error: An unexpected internal error occurred."
-        },
-        rotation_triggers: [401, 403, 429] // Codes that should trigger key rotation
+        }
     },
     [SECRET_KEYS.OPENAI]: {
         name: "OpenAI",
@@ -143,8 +142,7 @@ const PROVIDER_ERROR_MAPPINGS = {
             429: "Rate Limit/Quota Exceeded: Too many requests or ran out of credits.",
             500: "Server Error: Issue on OpenAI's servers.",
             503: "Service Unavailable: Engine overloaded or high traffic."
-        },
-        rotation_triggers: [401, 429]
+        }
     },
     [SECRET_KEYS.MAKERSUITE]: {
         name: "Google AI Studio (Gemini)",
@@ -156,8 +154,7 @@ const PROVIDER_ERROR_MAPPINGS = {
             500: "Internal Error: Unexpected error on Google's side (e.g., context too long).",
             503: "Service Unavailable: Service temporarily overloaded or down.",
             504: "Deadline Exceeded: Request took too long (e.g., context too large)."
-        },
-        rotation_triggers: [403, 429]
+        }
     },
     [SECRET_KEYS.DEEPSEEK]: {
         name: "DeepSeek",
@@ -166,8 +163,7 @@ const PROVIDER_ERROR_MAPPINGS = {
             429: "Too Many Requests: Reduce request rate or upgrade plan.",
             500: "Server Error: Retry the request after a short delay.",
             503: "Service Unavailable: Check status page."
-        },
-        rotation_triggers: [401, 429]
+        }
     },
     [SECRET_KEYS.XAI]: {
         name: "Xai (Grok)",
@@ -180,8 +176,7 @@ const PROVIDER_ERROR_MAPPINGS = {
             415: "Unsupported Media Type: Empty request body or missing Content-Type header.",
             422: "Unprocessable Entity: Invalid format for a field in the request body.",
             429: "Too Many Requests: Rate limit reached."
-        },
-        rotation_triggers: [401, 403, 429]
+        }
     }
 };
 
@@ -472,18 +467,22 @@ jQuery(async () => {
                         statusCode = parseInt(statusCodeMatch[1], 10);
                     }
 
-                    // Check removal conditions
+                    // Check removal conditions ONLY if switching is enabled
                     const isRemovalStatusCode = REMOVAL_STATUS_CODES.includes(statusCode);
                     const isRemovalMessage = REMOVAL_MESSAGE_REGEX.test(errorMessage);
 
                     if (isRemovalStatusCode || isRemovalMessage) {
-                        console.log(`Removal trigger matched for ${provider.name}. Code: ${statusCode}, Message Match: ${isRemovalMessage}. Removing key: ${failedKey}`);
+                        console.log(`Removal trigger matched for ${provider.name} (Switching ON). Code: ${statusCode}, Message Match: ${isRemovalMessage}. Removing key: ${failedKey}`);
                         const newKey = await handleKeyRemoval(provider, failedKey);
                         keyRemoved = true;
                         removedKeyValue = failedKey;
+                        // NOTE: Key rotation (handleKeyRotation) is handled separately by CHAT_COMPLETION_SETTINGS_READY listener
                     } else {
-                        console.log(`Error for ${provider.name} (Code: ${statusCode || 'N/A'}) did not match removal triggers.`);
+                        console.log(`Error for ${provider.name} (Switching ON) did not match removal triggers.`);
                     }
+                } else if (failedKey) {
+                    // Log that switching is off, so no removal attempted
+                    console.log(`Error for ${provider.name} occurred, but Key Switching is OFF. No key removal attempted.`);
                 }
 
                 // Show details popup if enabled (pass removal info)
