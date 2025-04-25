@@ -202,43 +202,62 @@ Object.values(PROVIDERS).forEach(provider => {
 function showErrorPopup(provider, errorMessage, errorTitle = "API Error") {
     let popupContent = `<h3>${errorTitle}</h3>`;
     let statusCode = null;
-    const statusCodeMatch = errorMessage.match(/\b(\d{3})\b/); // Attempt to extract 3-digit status code
+    let detailedError = null;
+
+    // Attempt to extract 3-digit status code
+    const statusCodeMatch = errorMessage.match(/\b(\d{3})\b/);
     if (statusCodeMatch) {
         statusCode = parseInt(statusCodeMatch[1], 10);
     }
 
-    const errorDetails = PROVIDER_ERROR_MAPPINGS[provider?.secret_key];
-
-    if (errorDetails && statusCode && errorDetails.codes[statusCode]) {
-        // Found provider-specific error code
-        popupContent += `
-            <h4>Provider: ${errorDetails.name}</h4>
-            <p><b>Status Code:</b> ${statusCode}</p>
-            <p><b>Possible Reason:</b> ${errorDetails.codes[statusCode]}</p>
-            <hr>
-            <p><b>Raw Error Message:</b></p>
-            <pre style="white-space: pre-wrap; word-wrap: break-word;">${errorMessage}</pre>
-        `;
-    } else if (errorDetails) {
-        // Found provider but not a specific code match, show generic provider info + raw message
-        popupContent += `
-            <h4>Provider: ${errorDetails.name}</h4>
-            <p><b>Raw Error Message:</b></p>
-            <pre style="white-space: pre-wrap; word-wrap: break-word;">${errorMessage}</pre>
-            <p><i>(Could not find specific details for this error code.)</i></p>
-        `;
-    } else {
-        // Generic fallback - show raw message only
-        popupContent += `
-            <p><b>Raw Error Message:</b></p>
-            <pre style="white-space: pre-wrap; word-wrap: break-word;">${errorMessage}</pre>
-        `;
+    // Attempt to parse detailed error from JSON in the message
+    try {
+        // Extract JSON part if possible (simple check for {})
+        const jsonMatch = errorMessage.match(/({.*})/);
+        if (jsonMatch && jsonMatch[1]) {
+            detailedError = JSON.parse(jsonMatch[1]).error; // Assuming error info is under an 'error' key
+        }
+    } catch (e) {
+        // Ignore parsing errors, stick with the raw message
+        console.warn("Could not parse detailed error from message:", e);
     }
 
-    const lastKeyElement = $(`#last_key_${provider?.secret_key}`)[0];
-    if (lastKeyElement) {
-        popupContent += `<p style="margin-top: 10px;"><i>${lastKeyElement.textContent}</i></p>`;
+    const providerMapping = PROVIDER_ERROR_MAPPINGS[provider?.secret_key];
+
+    // Display Provider Name
+    if (providerMapping) {
+        popupContent += `<h4>Provider: ${providerMapping.name}</h4>`;
     }
+
+    // Display Current Key
+    const currentKeyElement = $(`#current_key_${provider?.secret_key}`)[0];
+    if (currentKeyElement) {
+        // Use textContent which should be like "Current: sk-xxxx..." or "Current: N/A"
+        popupContent += `<p><b>${currentKeyElement.textContent}</b></p>`;
+    }
+
+    // Display Status Code and Specific Reason
+    if (statusCode) {
+        popupContent += `<p><b>Status Code:</b> ${statusCode}</p>`;
+        if (providerMapping && providerMapping.codes[statusCode]) {
+            popupContent += `<p><b>Possible Reason:</b> ${providerMapping.codes[statusCode]}</p>`;
+        }
+    }
+
+    // Display Parsed Detailed Error Message/Type
+    if (detailedError) {
+        popupContent += `<p><b>API Message:</b> ${detailedError.message || 'N/A'}</p>`;
+        if (detailedError.type) {
+            popupContent += `<p><b>Type:</b> ${detailedError.type}</p>`;
+        }
+        if (detailedError.code) {
+            popupContent += `<p><b>Code:</b> ${detailedError.code}</p>`;
+        }
+    }
+
+    // Separator and Raw Message
+    popupContent += `<hr><p><b>Raw Error Message:</b></p>
+                     <pre style="white-space: pre-wrap; word-wrap: break-word;">${errorMessage}</pre>`;
 
     popupFunctions.callGenericPopup(popupContent, popupFunctions.POPUP_TYPE.TEXT, "", { large: true, wide: true, allowVerticalScrolling: true });
 }
@@ -533,7 +552,8 @@ jQuery(async () => {
             });
 
             const viewErrorButton = await createButton("View Error Info", async () => {
-                showErrorPopup(provider, "", "API Error"); // Keep generic for now
+                // Pass provider and a generic message for manual view
+                showErrorPopup(provider, "Manually requested error info display.", `${provider.name} Error Info`);
             });
 
             const errorToggleButton = await createButton("Toggle Error Details", async () => {
