@@ -187,7 +187,7 @@ const PROVIDER_ERROR_MAPPINGS = {
 
 // Removal Triggers
 const REMOVAL_STATUS_CODES = [400, 401, 403, 404, 429];
-const REMOVAL_MESSAGE_REGEX = /Unauthorized|Forbidden|Permission|Invalid|Exceeded/i;
+const REMOVAL_MESSAGE_REGEX = /Unauthorized|Forbidden|Permission|Invalid|Exceeded|Internal/i;
 
 // Check if current source matches a provider
 const isProviderSource = (provider) => provider.source_check();
