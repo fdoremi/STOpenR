@@ -191,39 +191,11 @@ const isProviderSource = (provider) => provider.source_check();
 let keySwitchingEnabled = {};
 let showErrorDetails = {};
 
-// Initialize states from localStorage (Compacted)
-Object.keys(PROVIDERS).forEach(providerKey => {
-    const provider = PROVIDERS[providerKey];
+// Initialize states from localStorage
+Object.values(PROVIDERS).forEach(provider => {
     keySwitchingEnabled[provider.secret_key] = localStorage.getItem(`switch_key_${provider.secret_key}`) === "true";
     showErrorDetails[provider.secret_key] = localStorage.getItem(`show_${provider.secret_key}_error`) !== "false";
 });
-
-// Helper function to update common UI elements for a provider
-function updateProviderUI(provider, newKey, apiKeys = [], previousKey = null) {
-    const textarea = $(`#${provider.custom_key}`)[0];
-    const currentKeyElement = $(`#current_key_${provider.secret_key}`)[0];
-    const lastKeyElement = $(`#last_key_${provider.secret_key}`)[0]; // Might be null if called during removal without rotation
-    const mainInput = $(`#${provider.input_id}`)[0];
-    const displayKey = newKey || 'N/A';
-    const keyListString = apiKeys.join("\\n");
-
-    if (textarea) {
-        textarea.value = keyListString;
-    }
-    if (currentKeyElement) {
-        currentKeyElement.textContent = `Current: ${displayKey}`;
-    }
-    // Only update last key if it exists and a previous key was relevant (rotation)
-    if (lastKeyElement && previousKey !== null) {
-        lastKeyElement.textContent = `Last Rotated: ${previousKey || 'N/A'}`;
-    }
-    if (mainInput) {
-        mainInput.value = newKey || "";
-    }
-    // Update the global secret state used by SillyTavern UI
-    secrets.secret_state[provider.secret_key] = !!newKey;
-    secretsFunctions.updateSecretDisplay(); // Refresh placeholders etc.
-}
 
 // Show error information popup (Enhanced)
 function showErrorPopup(provider, errorMessage, errorTitle = "API Error", wasKeyRemoved = false, removedKey = null) {
@@ -330,31 +302,56 @@ async function handleKeyRotation(providerKey) {
 
     // Get the list of API keys
     const apiKeys = (loadedSecrets[provider.custom_key] || "")
-        .split(/[\\n;]/)
+        .split(/[\n;]/)
         .map(k => k.trim())
         .filter(k => k.length > 0);
 
     if (apiKeys.length <= 1) return;
 
-    const currentKey = await secretsFunctions.findSecret(provider.secret_key) || "";
+    // Get current key from secrets
+    // Use findSecret as the main input might be hidden/populated from secrets
+    const currentKey = await secretsFunctions.findSecret(provider.secret_key) || ""; // Fetch the currently active key
     let newKey = "";
 
+    // Rotate keys - remove current key from list and add to end
     const currentKeyIndex = apiKeys.indexOf(currentKey);
     if (currentKeyIndex !== -1) {
         apiKeys.splice(currentKeyIndex, 1);
         apiKeys.push(currentKey);
-        newKey = apiKeys[0];
+        newKey = apiKeys[0]; // Next key in the list
     } else {
+        // If current key isn't in the custom list, just use the first custom key
         newKey = apiKeys[0];
     }
 
-    if (!newKey || newKey === currentKey) return;
+    if (!newKey || newKey === currentKey) return; // No rotation needed or possible
 
+    // Update the active key secret
     await secretsFunctions.writeSecret(provider.secret_key, newKey);
-    await saveKey(provider.custom_key, apiKeys.join("\\n"), false);
+    // Save the rotated list back to the custom key secret
+    await saveKey(provider.custom_key, apiKeys.join("\n"), false); // Escaped newline
 
-    // Update UI using the helper function
-    updateProviderUI(provider, newKey, apiKeys, currentKey);
+    // Update UI elements if they exist
+    const textarea = $(`#${provider.custom_key}`)[0];
+    const currentKeyElement = $(`#current_key_${provider.secret_key}`)[0];
+    const lastKeyElement = $(`#last_key_${provider.secret_key}`)[0];
+
+    if (textarea && currentKeyElement && lastKeyElement) {
+        currentKeyElement.textContent = `Current: ${newKey}`;
+        lastKeyElement.textContent = `Last: ${currentKey || 'N/A'}`; // Show the key that was just replaced
+        textarea.value = apiKeys.join("\n"); // Escaped newline
+    }
+
+    // Optionally, update the main key input field if it's visible/relevant
+    const mainInput = $(`#${provider.input_id}`)[0];
+    if (mainInput) {
+        mainInput.value = newKey; // Update the main input field
+        // Potentially trigger change/input event if needed by other scripts
+        // $(mainInput).trigger('input').trigger('change');
+    }
+     // Update the global secret state used by SillyTavern UI
+    secrets.secret_state[provider.secret_key] = !!newKey;
+    secretsFunctions.updateSecretDisplay(); // Refresh placeholders etc.
 
     console.log(`${provider.name} Key Rotated: ${currentKey} -> ${newKey}`);
 }
@@ -365,29 +362,52 @@ async function handleKeyRemoval(provider, failedKey) {
     const loadedSecrets = await getSecrets();
     if (!loadedSecrets || !failedKey) return null;
 
+    // Get the current list of API keys
     let apiKeys = (loadedSecrets[provider.custom_key] || "")
-        .split(/[\\n;]/)
+        .split(/[\n;]/)
         .map(k => k.trim())
         .filter(k => k.length > 0);
 
     if (!apiKeys.includes(failedKey)) {
         console.warn(`Key ${failedKey} not found in custom list for ${provider.name}. Cannot remove.`);
-        return null;
+        return null; // Key not in the list anyway
     }
 
+    // Remove the failing key
     apiKeys = apiKeys.filter(key => key !== failedKey);
     console.log(`Removed key ${failedKey}. Remaining keys for ${provider.name}:`, apiKeys);
 
-    await saveKey(provider.custom_key, apiKeys.join("\\n"), false);
+    // Save the updated list back
+    await saveKey(provider.custom_key, apiKeys.join("\n"), false);
 
+    // Determine the new key (first from the remaining list, or null)
     const newKey = apiKeys.length > 0 ? apiKeys[0] : null;
     console.log(`New active key for ${provider.name} will be: ${newKey}`);
 
+    // Update the active key secret
     await secretsFunctions.writeSecret(provider.secret_key, newKey || "");
 
-    // Update UI using the helper function
-    // Pass null for previousKey as this isn't a rotation display scenario
-    updateProviderUI(provider, newKey, apiKeys, null);
+    // Update UI elements
+    const textarea = $(`#${provider.custom_key}`)[0];
+    const currentKeyElement = $(`#current_key_${provider.secret_key}`)[0];
+    // No need to update lastKeyElement logic here
+
+    if (textarea) {
+        textarea.value = apiKeys.join("\n"); // Reflect the updated list
+    }
+    if (currentKeyElement) {
+        currentKeyElement.textContent = `Current: ${newKey || 'N/A'}`;
+    }
+
+    // Update the main input field if it exists
+    const mainInput = $(`#${provider.input_id}`)[0];
+    if (mainInput) {
+        mainInput.value = newKey || "";
+    }
+
+    // Update the global secret state
+    secrets.secret_state[provider.secret_key] = !!newKey;
+    secretsFunctions.updateSecretDisplay();
 
     return newKey;
 }
@@ -486,10 +506,161 @@ jQuery(async () => {
         console.log(`${provider.name} form:`, formElement);
 
         if (formElement) {
-            // Call the helper function to set up the UI
-            await setupProviderUI(provider, loadedSecrets, formElement);
+            // Create container for multiple keys
+            const flexContainer = document.createElement("div");
+            flexContainer.classList.add("flex-container", "flex", "flexFlowColumn"); // Added flexFlowColumn
+            flexContainer.style.marginTop = "10px"; // Add some spacing
+
+            // Add heading
+            const heading = document.createElement("h4");
+            heading.textContent = `${provider.name} Multiple API Keys`;
+            heading.style.marginTop = "0px"; // Adjust spacing
+            flexContainer.appendChild(heading);
+
+            // Create textarea for API keys
+            const textarea = document.createElement("textarea");
+            textarea.classList.add("text_pole", "textarea_compact", "autoSetHeight");
+            textarea.placeholder = "Enter API Keys (one per line or separated by ';')";
+            textarea.style.height = "100px"; // Adjust height as needed
+            textarea.id = provider.custom_key;
+
+             // Load existing custom keys
+            textarea.value = loadedSecrets[provider.custom_key] || "";
+
+            // Add event listener for saving keys on change
+            textarea.addEventListener("change", async () => { // Make async
+                const keys = textarea.value
+                    .split(/[\n;]/)
+                    .map(k => k.trim())
+                    .filter(k => k.length > 0);
+
+                textarea.value = keys.join("\n"); // Escaped newline
+
+                // Save the full list to the custom key secret
+                await saveKey(provider.custom_key, keys.join("\n"), false); // Escaped newline
+
+                // If keys exist, set the first one as the active key
+                if (keys.length > 0) {
+                    const firstKey = keys[0];
+                    // Check if the current active key is different from the first key in the new list
+                    const currentActiveKey = await secretsFunctions.findSecret(provider.secret_key);
+                    if (currentActiveKey !== firstKey) {
+                         await secretsFunctions.writeSecret(provider.secret_key, firstKey);
+                         // Update related UI elements
+                         const currentKeyElement = $(`#current_key_${provider.secret_key}`)[0];
+                         if (currentKeyElement) currentKeyElement.textContent = `Current: ${firstKey}`;
+                         const mainInput = $(`#${provider.input_id}`)[0];
+                         if (mainInput) mainInput.value = firstKey;
+                         // Update global state and display
+                         secrets.secret_state[provider.secret_key] = !!firstKey;
+                         secretsFunctions.updateSecretDisplay();
+                    }
+                } else {
+                    // If no keys left, clear the active key
+                    await secretsFunctions.writeSecret(provider.secret_key, "");
+                    const currentKeyElement = $(`#current_key_${provider.secret_key}`)[0];
+                    if (currentKeyElement) currentKeyElement.textContent = `Current: N/A`;
+                    const mainInput = $(`#${provider.input_id}`)[0];
+                    if (mainInput) mainInput.value = "";
+                     // Update global state and display
+                    secrets.secret_state[provider.secret_key] = false;
+                    secretsFunctions.updateSecretDisplay();
+                }
+            });
+
+
+            flexContainer.appendChild(textarea);
+
+            // Create info panel
+            const infoPanel = document.createElement("div");
+            infoPanel.style.marginTop = "10px";
+            const infoPanelHeading = document.createElement("h4");
+            infoPanelHeading.textContent = "Key Usage Information:";
+            infoPanel.appendChild(infoPanelHeading);
+
+             // Find the currently active key for display
+             const activeKey = await secretsFunctions.findSecret(provider.secret_key) || "N/A"; // Fetch active key
+
+            // Current key display
+            const currentKeyDiv = document.createElement("div");
+            currentKeyDiv.textContent = `Current: ${activeKey}`;
+            currentKeyDiv.id = `current_key_${provider.secret_key}`;
+
+            // Last used key display (simplified - shows the last key in the list)
+            const lastKeyDiv = document.createElement("div");
+            const customKeysArray = (loadedSecrets[provider.custom_key] || "").split("\n"); // Escaped newline
+            const lastKey = customKeysArray.length > 1 ? customKeysArray[customKeysArray.length - 1] : "N/A"; // Placeholder logic
+            lastKeyDiv.textContent = `Last Rotated: ${lastKey}`; // Adjusted label
+            lastKeyDiv.id = `last_key_${provider.secret_key}`;
+
+            // Key switching status
+            const switchStatusDiv = document.createElement("div");
+            switchStatusDiv.textContent = `Key Switching: ${keySwitchingEnabled[provider.secret_key] ? "On" : "Off"}`;
+            switchStatusDiv.id = `switch_key_${provider.secret_key}`;
+
+            // Error toggle status
+            const errorToggleDiv = document.createElement("div");
+            errorToggleDiv.textContent = `Error Details: ${showErrorDetails[provider.secret_key] ? "On" : "Off"}`;
+            errorToggleDiv.id = `show_${provider.secret_key}_error`;
+
+            // Add elements to info panel
+            infoPanel.appendChild(currentKeyDiv);
+            infoPanel.appendChild(lastKeyDiv);
+            infoPanel.appendChild(switchStatusDiv);
+            infoPanel.appendChild(errorToggleDiv);
+
+            // Create button container
+            const buttonContainer = document.createElement("div");
+            buttonContainer.classList.add("flex-container", "flex");
+            buttonContainer.style.marginTop = "10px";
+
+            // Create buttons (using provider context)
+            const keySwitchingButton = await createButton("Toggle Switching", async () => {
+                keySwitchingEnabled[provider.secret_key] = !keySwitchingEnabled[provider.secret_key];
+                localStorage.setItem(`switch_key_${provider.secret_key}`, keySwitchingEnabled[provider.secret_key].toString());
+                switchStatusDiv.textContent = `Key Switching: ${keySwitchingEnabled[provider.secret_key] ? "On" : "Off"}`;
+            });
+
+            const viewErrorButton = await createButton("View Error Info", async () => {
+                // Pass provider and a generic message for manual view
+                showErrorPopup(provider, "Manually requested error info display.", `${provider.name} Error Info`);
+            });
+
+            const errorToggleButton = await createButton("Toggle Error Details", async () => {
+                showErrorDetails[provider.secret_key] = !showErrorDetails[provider.secret_key];
+                localStorage.setItem(`show_${provider.secret_key}_error`, showErrorDetails[provider.secret_key].toString());
+                errorToggleDiv.textContent = `Error Details: ${showErrorDetails[provider.secret_key] ? "On" : "Off"}`;
+            });
+
+             const rotateManuallyButton = await createButton("Rotate Key Now", async () => {
+                 console.log(`Manual rotation requested for ${provider.name}`);
+                 await handleKeyRotation(provider.secret_key);
+             });
+
+
+            // Append buttons to container
+            buttonContainer.appendChild(keySwitchingButton);
+            buttonContainer.appendChild(rotateManuallyButton); // Added manual rotate
+            buttonContainer.appendChild(viewErrorButton);
+            buttonContainer.appendChild(errorToggleButton);
+
+
+             // Inject elements into the form
+             const insertBeforeElement = formElement.querySelector('hr, button, .form_section_block'); // Find a suitable insertion point
+             if (insertBeforeElement) {
+                 formElement.insertBefore(infoPanel, insertBeforeElement);
+                 formElement.insertBefore(flexContainer, insertBeforeElement);
+                 formElement.insertBefore(buttonContainer, insertBeforeElement);
+                 formElement.insertBefore(document.createElement("hr"), insertBeforeElement); // Add a separator
+             } else {
+                 // Fallback: Append to the end
+                 formElement.appendChild(infoPanel);
+                 formElement.appendChild(flexContainer);
+                 formElement.appendChild(buttonContainer);
+                 formElement.appendChild(document.createElement("hr"));
+             }
         } else {
-            console.warn(`Could not find form element for ${provider.name} (ID: ${provider.form_id})`);
+             console.warn(`Could not find form element for ${provider.name} (ID: ${provider.form_id})`);
         }
     }
 
