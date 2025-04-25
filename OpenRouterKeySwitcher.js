@@ -96,9 +96,9 @@ const PROVIDERS = {
         source_check: () => oaiFunctions.oai_settings.api_server_chat === 'google', // Need to verify this check
         secret_key: SECRET_KEYS.MAKERSUITE,
         custom_key: "api_key_makersuite_custom",
-        form_id: "google_form", // Assumed, may need to check HTML
+        form_id: "makersuite_form", // Corrected form ID
         input_id: "api_key_makersuite",
-        get_form: () => $("#google_form")[0], // Assumed
+        get_form: () => $("#makersuite_form")[0], // Corrected selector
     },
     DEEPSEEK: {
         name: "DeepSeek",
@@ -519,6 +519,21 @@ jQuery(async () => {
                  break;
             }
          }
+    });
+
+    // Add listener for automatic key rotation before chat completion requests
+    scriptFunctions.eventSource.on(scriptFunctions.event_types.CHAT_COMPLETION_SETTINGS_READY, async () => {
+        console.log("Chat completion settings ready, checking for key rotation...");
+        for (const provider of Object.values(PROVIDERS)) {
+            if (isProviderSource(provider)) {
+                // Check if key switching is enabled for this provider before rotating
+                if (keySwitchingEnabled[provider.secret_key]) {
+                    console.log(`Provider ${provider.name} is active and switching is enabled. Attempting key rotation.`);
+                    await handleKeyRotation(provider.secret_key);
+                }
+                 break; // Process only the active provider
+            }
+        }
     });
 
     console.log("MultiProviderKeySwitcher: Initialization complete.");
