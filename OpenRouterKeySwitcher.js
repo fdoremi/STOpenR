@@ -75,7 +75,7 @@ const PROVIDERS = {
     },
     ANTHROPIC: {
         name: "Anthropic (Claude)",
-        source_check: () => oaiFunctions.oai_settings.api_server_chat === 'claude', // Need to verify this check
+        source_check: () => oaiFunctions.oai_settings.chat_completion_source === 'claude', // Standardize to chat_completion_source
         secret_key: SECRET_KEYS.CLAUDE,
         custom_key: "api_key_claude_custom",
         form_id: "claude_form",
@@ -84,7 +84,7 @@ const PROVIDERS = {
     },
     OPENAI: {
         name: "OpenAI",
-        source_check: () => oaiFunctions.oai_settings.api_server_chat === 'openai', // Need to verify this check
+        source_check: () => oaiFunctions.oai_settings.chat_completion_source === 'openai', // Standardize to chat_completion_source
         secret_key: SECRET_KEYS.OPENAI,
         custom_key: "api_key_openai_custom",
         form_id: "openai_form", // Assumed, may need to check HTML
@@ -93,7 +93,7 @@ const PROVIDERS = {
     },
     GEMINI: {
         name: "Google AI Studio (Gemini)",
-        source_check: () => oaiFunctions.oai_settings.api_server_chat === 'google', // Need to verify this check
+        source_check: () => oaiFunctions.oai_settings.chat_completion_source === 'google', // Standardize to chat_completion_source
         secret_key: SECRET_KEYS.MAKERSUITE,
         custom_key: "api_key_makersuite_custom",
         form_id: "makersuite_form", // Corrected form ID
@@ -524,8 +524,16 @@ jQuery(async () => {
     // Add listener for automatic key rotation before chat completion requests
     scriptFunctions.eventSource.on(scriptFunctions.event_types.CHAT_COMPLETION_SETTINGS_READY, async () => {
         console.log("Chat completion settings ready, checking for key rotation...");
+        // Log current source setting
+        const currentSource = oaiFunctions.oai_settings.chat_completion_source;
+        console.log(`Current chat_completion_source: ${currentSource}`);
+
         for (const provider of Object.values(PROVIDERS)) {
-            if (isProviderSource(provider)) {
+             const isActive = isProviderSource(provider);
+             // Log check result for each provider
+             console.log(`Checking provider ${provider.name}: isActive = ${isActive}`);
+
+            if (isActive) {
                 // Check if key switching is enabled for this provider before rotating
                 if (keySwitchingEnabled[provider.secret_key]) {
                     console.log(`Provider ${provider.name} is active and switching is enabled. Attempting key rotation.`);
