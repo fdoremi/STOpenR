@@ -185,6 +185,10 @@ const PROVIDER_ERROR_MAPPINGS = {
     }
 };
 
+// Removal Triggers
+const REMOVAL_STATUS_CODES = [400, 401, 403, 404, 429];
+const REMOVAL_MESSAGE_REGEX = /Unauthorized|Forbidden|Permission|Invalid|Exceeded/i;
+
 // Check if current source matches a provider
 const isProviderSource = (provider) => provider.source_check();
 
@@ -199,7 +203,7 @@ Object.values(PROVIDERS).forEach(provider => {
 });
 
 // Show error information popup (Enhanced)
-function showErrorPopup(provider, errorMessage, errorTitle = "API Error") {
+function showErrorPopup(provider, errorMessage, errorTitle = "API Error", wasKeyRemoved = false, removedKey = null) {
     let popupContent = `<h3>${errorTitle}</h3>`;
     let statusCode = null;
     let detailedError = null;
@@ -253,6 +257,11 @@ function showErrorPopup(provider, errorMessage, errorTitle = "API Error") {
         if (detailedError.code) {
             popupContent += `<p><b>Code:</b> ${detailedError.code}</p>`;
         }
+    }
+
+    // Display Removal Message if applicable
+    if (wasKeyRemoved && removedKey) {
+        popupContent += `<p style='color: red; font-weight: bold; margin-top: 10px;'>The failing API key (${removedKey}) has been automatically removed from your list. Please try generating again.</p>`;
     }
 
     // Separator and Raw Message
@@ -352,6 +361,62 @@ async function handleKeyRotation(providerKey) {
     console.log(`${provider.name} Key Rotated: ${currentKey} -> ${newKey}`);
 }
 
+// Handle key REMOVAL when specific errors occur
+async function handleKeyRemoval(provider, failedKey) {
+    console.log(`Attempting to remove failing key for ${provider.name}: ${failedKey}`);
+    const loadedSecrets = await getSecrets();
+    if (!loadedSecrets || !failedKey) return null;
+
+    // Get the current list of API keys
+    let apiKeys = (loadedSecrets[provider.custom_key] || "")
+        .split(/[\n;]/)
+        .map(k => k.trim())
+        .filter(k => k.length > 0);
+
+    if (!apiKeys.includes(failedKey)) {
+        console.warn(`Key ${failedKey} not found in custom list for ${provider.name}. Cannot remove.`);
+        return null; // Key not in the list anyway
+    }
+
+    // Remove the failing key
+    apiKeys = apiKeys.filter(key => key !== failedKey);
+    console.log(`Removed key ${failedKey}. Remaining keys for ${provider.name}:`, apiKeys);
+
+    // Save the updated list back
+    await saveKey(provider.custom_key, apiKeys.join("\n"), false);
+
+    // Determine the new key (first from the remaining list, or null)
+    const newKey = apiKeys.length > 0 ? apiKeys[0] : null;
+    console.log(`New active key for ${provider.name} will be: ${newKey}`);
+
+    // Update the active key secret
+    await secretsFunctions.writeSecret(provider.secret_key, newKey || "");
+
+    // Update UI elements
+    const textarea = $(`#${provider.custom_key}`)[0];
+    const currentKeyElement = $(`#current_key_${provider.secret_key}`)[0];
+    // No need to update lastKeyElement logic here
+
+    if (textarea) {
+        textarea.value = apiKeys.join("\n"); // Reflect the updated list
+    }
+    if (currentKeyElement) {
+        currentKeyElement.textContent = `Current: ${newKey || 'N/A'}`;
+    }
+
+    // Update the main input field if it exists
+    const mainInput = $(`#${provider.input_id}`)[0];
+    if (mainInput) {
+        mainInput.value = newKey || "";
+    }
+
+    // Update the global secret state
+    secrets.secret_state[provider.secret_key] = !!newKey;
+    secretsFunctions.updateSecretDisplay();
+
+    return newKey;
+}
+
 // Save a key to secrets
 async function saveKey(key, value, updateDisplay = true) {
     await secretsFunctions.writeSecret(key, value);
@@ -380,7 +445,7 @@ jQuery(async () => {
 
     // Override the default toastr.error to catch API errors
     const originalToastrError = toastr.error;
-    toastr.error = async function(...args) { // Make async to allow key rotation
+    toastr.error = async function(...args) { // Make async
         originalToastrError(...args);
         console.log("Toastr Error Args:", args);
         console.error(...args);
@@ -392,31 +457,40 @@ jQuery(async () => {
             // Check if the source is active
             if (isProviderSource(provider)) {
                 console.log(`Error occurred while ${provider.name} was active.`);
+                let keyRemoved = false;
+                let removedKeyValue = null;
 
-                // Show details popup if enabled
-                if (showErrorDetails[provider.secret_key]) {
-                     showErrorPopup(provider, errorMessage, errorTitle || `${provider.name} API Error`);
-                }
+                // Fetch the key that likely caused the error
+                const failedKey = await secretsFunctions.findSecret(provider.secret_key);
+                console.log(`Key that potentially failed for ${provider.name}: ${failedKey}`);
 
-                // Trigger key rotation on specific error codes
-                const errorDetails = PROVIDER_ERROR_MAPPINGS[provider.secret_key];
-                if (errorDetails && keySwitchingEnabled[provider.secret_key]) {
+                if (failedKey && keySwitchingEnabled[provider.secret_key]) {
+                    // Extract status code
                     const statusCodeMatch = errorMessage.match(/\b(\d{3})\b/);
                     let statusCode = null;
                     if (statusCodeMatch) {
                         statusCode = parseInt(statusCodeMatch[1], 10);
                     }
 
-                    // Check if status code triggers rotation for this provider
-                    if (statusCode && errorDetails.rotation_triggers.includes(statusCode)) {
-                        console.log(`Detected rotation trigger for ${provider.name} (Code: ${statusCode}). Rotating key...`);
-                        await handleKeyRotation(provider.secret_key);
+                    // Check removal conditions
+                    const isRemovalStatusCode = REMOVAL_STATUS_CODES.includes(statusCode);
+                    const isRemovalMessage = REMOVAL_MESSAGE_REGEX.test(errorMessage);
+
+                    if (isRemovalStatusCode || isRemovalMessage) {
+                        console.log(`Removal trigger matched for ${provider.name}. Code: ${statusCode}, Message Match: ${isRemovalMessage}. Removing key: ${failedKey}`);
+                        const newKey = await handleKeyRemoval(provider, failedKey);
+                        keyRemoved = true;
+                        removedKeyValue = failedKey;
                     } else {
-                        // Optional: Add checks for error message keywords if status code isn't present/reliable
-                        // e.g., /invalid api key|insufficient quota/i.test(errorMessage)
-                        console.log(`Error for ${provider.name} (Code: ${statusCode || 'N/A'}) did not match rotation triggers: ${errorDetails.rotation_triggers.join(', ')}`);
+                        console.log(`Error for ${provider.name} (Code: ${statusCode || 'N/A'}) did not match removal triggers.`);
                     }
                 }
+
+                // Show details popup if enabled (pass removal info)
+                if (showErrorDetails[provider.secret_key]) {
+                     showErrorPopup(provider, errorMessage, errorTitle || `${provider.name} API Error`, keyRemoved, removedKeyValue);
+                }
+
                  break; // Stop checking other providers once the active one is found
             }
         }
@@ -650,4 +724,5 @@ jQuery(async () => {
 });
 
 // Export the plugin's init function
+export default exports.default; 
 export default exports.default; 
