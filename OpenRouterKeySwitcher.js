@@ -120,6 +120,71 @@ const PROVIDERS = {
     }
 };
 
+// Provider-specific error details
+const PROVIDER_ERROR_MAPPINGS = {
+    [SECRET_KEYS.CLAUDE]: {
+        name: "Anthropic (Claude)",
+        codes: {
+            400: "Invalid Request: Check the format or content of your request.",
+            401: "Authentication Error: Check your API key.",
+            403: "Permission Error: Your API key lacks permission for this resource.",
+            404: "Not Found: The requested resource was not found.",
+            413: "Request Too Large: Request exceeds the maximum size.",
+            429: "Rate Limit Error: Your account has hit a rate limit.",
+            500: "API Error: An unexpected internal error occurred."
+        },
+        rotation_triggers: [401, 403, 429] // Codes that should trigger key rotation
+    },
+    [SECRET_KEYS.OPENAI]: {
+        name: "OpenAI",
+        codes: {
+            401: "Authentication Error: Invalid API key or organization.",
+            403: "Permission Denied: Country, region, or territory not supported, or other permission issue.",
+            429: "Rate Limit/Quota Exceeded: Too many requests or ran out of credits.",
+            500: "Server Error: Issue on OpenAI's servers.",
+            503: "Service Unavailable: Engine overloaded or high traffic."
+        },
+        rotation_triggers: [401, 429]
+    },
+    [SECRET_KEYS.MAKERSUITE]: {
+        name: "Google AI Studio (Gemini)",
+        codes: {
+            400: "Invalid Argument/Failed Precondition: Malformed request or billing/region issue for free tier.",
+            403: "Permission Denied: API key lacks permissions or issue with tuned model auth.",
+            404: "Not Found: Requested resource (e.g., file) wasn't found.",
+            429: "Resource Exhausted: Rate limit exceeded.",
+            500: "Internal Error: Unexpected error on Google's side (e.g., context too long).",
+            503: "Service Unavailable: Service temporarily overloaded or down.",
+            504: "Deadline Exceeded: Request took too long (e.g., context too large)."
+        },
+        rotation_triggers: [403, 429]
+    },
+    [SECRET_KEYS.DEEPSEEK]: {
+        name: "DeepSeek",
+        codes: {
+            401: "Unauthorized: Check your API key and authentication headers.",
+            429: "Too Many Requests: Reduce request rate or upgrade plan.",
+            500: "Server Error: Retry the request after a short delay.",
+            503: "Service Unavailable: Check status page."
+        },
+        rotation_triggers: [401, 429]
+    },
+    [SECRET_KEYS.XAI]: {
+        name: "Xai (Grok)",
+        codes: {
+            400: "Bad Request: Invalid argument or incorrect API key supplied.",
+            401: "Unauthorized: Missing or invalid authorization token.",
+            403: "Forbidden: API key lacks permission or is blocked.",
+            404: "Not Found: Model not found or invalid endpoint URL.",
+            405: "Method Not Allowed: Incorrect HTTP method used.",
+            415: "Unsupported Media Type: Empty request body or missing Content-Type header.",
+            422: "Unprocessable Entity: Invalid format for a field in the request body.",
+            429: "Too Many Requests: Rate limit reached."
+        },
+        rotation_triggers: [401, 403, 429]
+    }
+};
+
 // Check if current source matches a provider
 const isProviderSource = (provider) => provider.source_check();
 
@@ -133,41 +198,49 @@ Object.values(PROVIDERS).forEach(provider => {
     showErrorDetails[provider.secret_key] = localStorage.getItem(`show_${provider.secret_key}_error`) !== "false";
 });
 
-// Show error information popup
-function showErrorPopup(customMessage = "") {
-    popupFunctions.callGenericPopup(`
-        ${customMessage}
-        <table class="responsiveTable">
-            <thead>
-                <tr>
-                    <th>Error</th>
-                    <th>Reason or Solution</th>
-                </tr>
-            </thead>
-            <tbody>
-                <tr>
-                    <td>401 Unauthorized</td>
-                    <td>Your API key is invalid or has expired. Please replace it with a valid key.</td>
-                </tr>
-                <tr>
-                    <td>402 Payment Required</td>
-                    <td>Your OpenRouter credits have been depleted. Add funds to your account or use a different API key.</td>
-                </tr>
-                <tr>
-                    <td>429 Too Many Requests</td>
-                    <td>You've hit the rate limit. Wait a while before making more requests or switch to a different API key.</td>
-                </tr>
-                <tr>
-                    <td>503 Service Unavailable</td>
-                    <td>The model or service is temporarily unavailable. Try again later or select a different model.</td>
-                </tr>
-                <tr>
-                    <td>Model unavailable</td>
-                    <td>The selected model may be offline or at capacity. Try a different model or provider.</td>
-                </tr>
-            </tbody>
-        </table>
-    `, popupFunctions.POPUP_TYPE.TEXT, "", { large: true, wide: true, allowVerticalScrolling: true });
+// Show error information popup (Enhanced)
+function showErrorPopup(provider, errorMessage, errorTitle = "API Error") {
+    let popupContent = `<h3>${errorTitle}</h3>`;
+    let statusCode = null;
+    const statusCodeMatch = errorMessage.match(/\b(\d{3})\b/); // Attempt to extract 3-digit status code
+    if (statusCodeMatch) {
+        statusCode = parseInt(statusCodeMatch[1], 10);
+    }
+
+    const errorDetails = PROVIDER_ERROR_MAPPINGS[provider?.secret_key];
+
+    if (errorDetails && statusCode && errorDetails.codes[statusCode]) {
+        // Found provider-specific error code
+        popupContent += `
+            <h4>Provider: ${errorDetails.name}</h4>
+            <p><b>Status Code:</b> ${statusCode}</p>
+            <p><b>Possible Reason:</b> ${errorDetails.codes[statusCode]}</p>
+            <hr>
+            <p><b>Raw Error Message:</b></p>
+            <pre style="white-space: pre-wrap; word-wrap: break-word;">${errorMessage}</pre>
+        `;
+    } else if (errorDetails) {
+        // Found provider but not a specific code match, show generic provider info + raw message
+        popupContent += `
+            <h4>Provider: ${errorDetails.name}</h4>
+            <p><b>Raw Error Message:</b></p>
+            <pre style="white-space: pre-wrap; word-wrap: break-word;">${errorMessage}</pre>
+            <p><i>(Could not find specific details for this error code.)</i></p>
+        `;
+    } else {
+        // Generic fallback - show raw message only
+        popupContent += `
+            <p><b>Raw Error Message:</b></p>
+            <pre style="white-space: pre-wrap; word-wrap: break-word;">${errorMessage}</pre>
+        `;
+    }
+
+    const lastKeyElement = $(`#last_key_${provider?.secret_key}`)[0];
+    if (lastKeyElement) {
+        popupContent += `<p style="margin-top: 10px;"><i>${lastKeyElement.textContent}</i></p>`;
+    }
+
+    popupFunctions.callGenericPopup(popupContent, popupFunctions.POPUP_TYPE.TEXT, "", { large: true, wide: true, allowVerticalScrolling: true });
 }
 
 // Initialize the plugin
@@ -297,26 +370,35 @@ jQuery(async () => {
 
         // Check each provider
         for (const provider of Object.values(PROVIDERS)) {
-            // Basic check if the source might match - refine this check if possible
-            // Example: Check if errorTitle contains provider name or if source is active
-            const isPotentiallyProviderError = (errorTitle === "Chat Completion API" || (errorTitle && errorTitle.includes(provider.name))) // Basic title check
-                                               && isProviderSource(provider); // Check if the provider is currently selected
+            // Check if the source is active
+            if (isProviderSource(provider)) {
+                console.log(`Error occurred while ${provider.name} was active.`);
 
-            if (isPotentiallyProviderError && showErrorDetails[provider.secret_key]) {
-                 const lastKeyElement = $(`#last_key_${provider.secret_key}`)[0];
-                 // TODO: Make error popup content more generic or provider-specific
-                showErrorPopup(`<h3>${provider.name} API Error</h3>
-                    <p>${errorMessage}</p>
-                    <p>${lastKeyElement ? lastKeyElement.textContent : ""}</p>`);
+                // Show details popup if enabled
+                if (showErrorDetails[provider.secret_key]) {
+                     showErrorPopup(provider, errorMessage, errorTitle || `${provider.name} API Error`);
+                }
 
-                 // Trigger key rotation on specific errors (e.g., 401, 402, 429)
-                 // This requires parsing the errorMessage or having more structured error info
-                 const shouldRotate = /401|402|429|invalid api key|insufficient quota/i.test(errorMessage);
-                 if (shouldRotate && keySwitchingEnabled[provider.secret_key]) {
-                     console.log(`Detected rotation trigger for ${provider.name}. Rotating key...`);
-                     await handleKeyRotation(provider.secret_key);
-                 }
-                 break; // Stop checking other providers once one matches
+                // Trigger key rotation on specific error codes
+                const errorDetails = PROVIDER_ERROR_MAPPINGS[provider.secret_key];
+                if (errorDetails && keySwitchingEnabled[provider.secret_key]) {
+                    const statusCodeMatch = errorMessage.match(/\b(\d{3})\b/);
+                    let statusCode = null;
+                    if (statusCodeMatch) {
+                        statusCode = parseInt(statusCodeMatch[1], 10);
+                    }
+
+                    // Check if status code triggers rotation for this provider
+                    if (statusCode && errorDetails.rotation_triggers.includes(statusCode)) {
+                        console.log(`Detected rotation trigger for ${provider.name} (Code: ${statusCode}). Rotating key...`);
+                        await handleKeyRotation(provider.secret_key);
+                    } else {
+                        // Optional: Add checks for error message keywords if status code isn't present/reliable
+                        // e.g., /invalid api key|insufficient quota/i.test(errorMessage)
+                        console.log(`Error for ${provider.name} (Code: ${statusCode || 'N/A'}) did not match rotation triggers: ${errorDetails.rotation_triggers.join(', ')}`);
+                    }
+                }
+                 break; // Stop checking other providers once the active one is found
             }
         }
     };
@@ -451,7 +533,7 @@ jQuery(async () => {
             });
 
             const viewErrorButton = await createButton("View Error Info", async () => {
-                showErrorPopup(); // Keep generic for now
+                showErrorPopup(provider, "", "API Error"); // Keep generic for now
             });
 
             const errorToggleButton = await createButton("Toggle Error Details", async () => {
