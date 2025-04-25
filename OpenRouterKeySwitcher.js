@@ -134,51 +134,129 @@ async function createButton(title, onClick) {
     return button;
 }
 
+// Function to update the current key display
+async function updateCurrentKeyDisplay() {
+    const currentKeyElement = $("#current_key_openrouter")[0];
+    if (!currentKeyElement) {
+        console.warn("OpenRouterKeySwitcher: Could not find current key display element.");
+        return; 
+    }
+
+    currentKeyElement.textContent = "Current Key: Loading..."; // Show loading state
+
+    try {
+        const latestSecrets = await getSecrets();
+        if (latestSecrets && latestSecrets.api_key_openrouter) {
+            const currentKey = latestSecrets.api_key_openrouter;
+            // Mask the key for display (e.g., show first 4 and last 4 chars)
+            const maskedKey = currentKey.length > 8 ? `${currentKey.substring(0, 4)}...${currentKey.substring(currentKey.length - 4)}` : currentKey;
+            currentKeyElement.textContent = `Current Key: ${maskedKey}`;
+        } else {
+            currentKeyElement.textContent = "Current Key: Not Set";
+        }
+    } catch (err) {
+        console.error("OpenRouterKeySwitcher: Failed to fetch secrets to update key display:", err);
+        currentKeyElement.textContent = "Current Key: Error";
+    }
+}
+
 // Handle key rotation when needed
 async function handleKeyRotation() {
     const loadedSecrets = await getSecrets();
-    if (!loadedSecrets) return;
-    if (!keySwitchingEnabled) return;
-    
+    if (!loadedSecrets) {
+        console.error("OpenRouterKeySwitcher: Failed to load secrets for rotation.");
+        toastr.error("Failed to load secrets for key rotation.");
+        return;
+    }
+    if (!keySwitchingEnabled) {
+        console.log("OpenRouterKeySwitcher: Key switching disabled, skipping rotation.");
+        // Optional: Notify user if they trigger manual rotation while disabled
+        // toastr.info("Key switching is currently disabled in settings.");
+        return;
+    }
+
     // Get the list of API keys
     const apiKeys = (loadedSecrets[CUSTOM_KEYS_KEY] || "")
-        .split(/[\n;]/)
+        .split(/[\n;]/) // Split by newline or semicolon
         .map(k => k.trim())
         .filter(k => k.length > 0);
-    
-    if (apiKeys.length <= 1) return;
-    
+
+    if (apiKeys.length <= 1) {
+        console.log("OpenRouterKeySwitcher: Not enough keys to rotate.");
+         toastr.info("OpenRouter Key Switcher: Add more keys to enable rotation.");
+        return;
+    }
+
     // Get current key
-    const currentKey = loadedSecrets.api_key_openrouter;
+    const currentKey = loadedSecrets.api_key_openrouter || "";
     let newKey = "";
-    
-    // Rotate keys - remove current key from list and add to end
-    if (apiKeys.includes(currentKey)) {
-        apiKeys.splice(apiKeys.indexOf(currentKey), 1);
-        apiKeys.push(currentKey);
+    let rotatedKeys = [...apiKeys]; // Create a mutable copy
+    let previousKey = currentKey; // Store the key being replaced
+
+    const currentIndex = rotatedKeys.indexOf(currentKey);
+
+    if (currentIndex !== -1) {
+        // Move the current key to the end
+        console.log(`OpenRouterKeySwitcher: Found current key '${currentKey.substring(0,4)}...' at index ${currentIndex}. Moving to end.`);
+        rotatedKeys.splice(currentIndex, 1);
+        rotatedKeys.push(currentKey);
+    } else if (rotatedKeys.length > 0) {
+         // If current key wasn't in the list (maybe set manually?), just pick the first from the custom list.
+         console.log(`OpenRouterKeySwitcher: Current key '${currentKey.substring(0,4)}...' not in custom list. Will use first key from list.`);
+         // Keep track of the key that *was* active, even if not in the list
+         previousKey = currentKey || "Unknown";
+    } else {
+         // This case should technically be caught by apiKeys.length <= 1, but adding for safety.
+         console.warn("OpenRouterKeySwitcher: No keys available in the custom list to rotate to.");
+         return; // No keys to switch to
     }
+
+
+    // Get the *new* first key from the potentially rotated list
+    newKey = rotatedKeys[0];
     
-    // Get first key from rotated list
-    newKey = apiKeys[0];
-    
-    // Update the key
-    secretsFunctions.writeSecret("api_key_openrouter", newKey);
-    saveKey(CUSTOM_KEYS_KEY, apiKeys.join("\n"));
-    
-    // Update UI
-    const textarea = $("#api_key_openrouter_custom")[0];
-    const currentKeyElement = $("#current_key_openrouter")[0];
-    const lastKeyElement = $("#last_key_openrouter")[0];
-    
-    console.log("Textarea:", textarea);
-    console.log("API keys:", apiKeys);
-    
-    // Update UI elements if they exist
-    if (textarea) {
-        currentKeyElement.textContent = `Current Key: ${newKey}`;
-        lastKeyElement.textContent = `Last Key: ${currentKey}`;
-        textarea.value = apiKeys.join("\n");
+    if (newKey === currentKey) {
+        console.log("OpenRouterKeySwitcher: Rotation resulted in the same key. No change needed.");
+        // This might happen if the current key wasn't found and the first key in the list was the same.
+        // Or if there are only duplicate keys in the list.
+        return;
     }
+
+    console.log(`OpenRouterKeySwitcher: Attempting rotation. Previous: ${previousKey.substring(0,4)}..., New: ${newKey.substring(0,4)}...`);
+
+    try {
+        // Update the main OpenRouter key
+        await secretsFunctions.writeSecret("api_key_openrouter", newKey);
+        // Save the reordered list back to the custom keys secret (important to keep order consistent)
+        await saveKey(CUSTOM_KEYS_KEY, rotatedKeys.join("\n"), false); // false = don't trigger generic updateSecretDisplay
+
+        console.log(`OpenRouterKeySwitcher: Successfully rotated key.`);
+        localStorage.setItem("last_rotated_key_openrouter", previousKey); // Store the key that was just replaced
+
+        // Update the "Previous Key" UI element directly, as updateCurrentKeyDisplay only handles the current one.
+        const lastKeyElement = $("#last_key_openrouter")[0];
+         if (lastKeyElement) {
+             const maskedLastKey = previousKey.length > 8 ? `${previousKey.substring(0, 4)}...${previousKey.substring(previousKey.length - 4)}` : previousKey;
+             lastKeyElement.textContent = `Previous Key: ${maskedLastKey}`;
+         }
+
+         // Update the textarea displaying the list of keys
+         const textarea = $("#api_key_openrouter_custom")[0];
+         if (textarea) {
+             textarea.value = rotatedKeys.join("\n");
+         }
+         
+         // Important: Save settings AFTER secrets have been successfully written
+         scriptFunctions.saveSettingsDebounced();
+         
+         // Notify user of successful rotation (optional, can be noisy)
+         // toastr.success(`Rotated OpenRouter key. New key ends in ...${newKey.substring(newKey.length - 4)}`);
+
+    } catch (error) {
+        console.error("OpenRouterKeySwitcher: Error during key rotation:", error);
+        toastr.error("Failed to save rotated key. Check console for details.");
+    }
+    // Note: updateCurrentKeyDisplay should be called *after* this function completes successfully.
 }
 
 // Save a key to secrets
@@ -207,163 +285,224 @@ async function getSecrets() {
 jQuery(async () => {
     console.log("OpenRouterKeySwitcher: jQuery ready, initializing...");
     
+    // Define updateCurrentKeyDisplay locally within jQuery ready scope 
+    // if it wasn't defined globally earlier or needs access to local vars.
+    // (Assuming it's defined globally as per previous step)
+
     // Override the default toastr.error to catch OpenRouter errors
     const originalToastrError = toastr.error;
     toastr.error = function(...args) {
-        originalToastrError(...args);
-        console.log(args);
-        console.error(...args);
-        
-        if (!isOpenRouterSource() || !showErrorDetails) return;
-        
+        originalToastrError(...args); // Call original first
+        console.log("OpenRouterKeySwitcher: toastr.error called with:", args);
+        console.error(...args); // Log the error for debugging
+
+        // Only proceed if OpenRouter is the selected source
+        if (!isOpenRouterSource()) {
+             console.log("OpenRouterKeySwitcher: Not an OpenRouter source, ignoring error for rotation.");
+            return;
+        }
+
         const [errorMessage, errorTitle] = args;
-        if (errorTitle && errorTitle === "Chat Completion API") {
-            const lastKeyElement = $("#last_key_openrouter")[0];
+
+        // Check if conditions are met for automatic key rotation
+        const shouldAttemptRotation = 
+            keySwitchingEnabled && 
+            errorTitle === "Chat Completion API" &&
+            errorMessage && // Ensure errorMessage is defined
+            (errorMessage.includes("401") || // Unauthorized (invalid/expired key)
+             errorMessage.includes("402") || // Payment Required (out of credits)
+             errorMessage.includes("429"));   // Too Many Requests (rate limit potentially per-key)
+
+        if (shouldAttemptRotation) {
+            console.log("OpenRouterKeySwitcher: Detected API error suggesting key issue. Attempting automatic rotation.");
+            // Use .then() to ensure UI update happens after rotation attempt
+            handleKeyRotation().then(() => {
+                console.log("OpenRouterKeySwitcher: Automatic rotation function completed. Updating display.");
+                // Rotation successful (or decided no rotation needed), update the display
+                toastr.info("Attempted to rotate OpenRouter API key due to error.");
+                updateCurrentKeyDisplay(); // Re-fetch and display the (potentially new) current key
+            }).catch(err => {
+                // Catch errors specifically from handleKeyRotation itself
+                console.error("OpenRouterKeySwitcher: Error during automatic key rotation execution:", err);
+                toastr.warning("Failed to automatically rotate OpenRouter API key. See console.");
+            });
+        } else {
+             console.log("OpenRouterKeySwitcher: Error did not meet criteria for automatic rotation.", 
+                         { keySwitchingEnabled, errorTitle, isAPIError: errorTitle === "Chat Completion API", includesCode: errorMessage?.search(/401|402|429/) !== -1 });
+        }
+
+        // Show the enhanced error details popup if enabled
+        if (showErrorDetails && errorTitle === "Chat Completion API") {
+            const lastKeyElement = $("#last_key_openrouter")[0]; 
+            const currentKeyElement = $("#current_key_openrouter")[0]; 
+            // Use textContent from the elements if they exist, otherwise show N/A
+            const currentKeyText = currentKeyElement ? currentKeyElement.textContent : "Current Key: N/A";
+            const lastKeyText = lastKeyElement ? lastKeyElement.textContent : "Previous Key: N/A";
+            
             showErrorPopup(`<h3>Chat Completion API Error</h3>
-                <p>${errorMessage}</p>
-                <p>${lastKeyElement ? lastKeyElement.textContent : ""}</p>`);
+                <p><b>Message:</b> ${errorMessage || "No details provided."}</p>
+                <p>--- Key Info ---</p>
+                <p>${currentKeyText}</p>
+                <p>${lastKeyText}</p>`);
         }
     };
     
-    // Get secrets
+    // Fetch initial secrets to setup the UI state
     const secrets = await getSecrets() || {};
-    await init(secrets);
+    // Initialize any other parts of the plugin if needed
+    await init(secrets); 
     
-    // Get the form - don't return early if not found
-    const openrouterForm = $("#openrouter_form")[0];
-    console.log("OpenRouterKeySwitcher: Found form:", openrouterForm);
-    
-    if (openrouterForm) {
-        // Create container for multiple keys
-        const flexContainer = document.createElement("div");
-        flexContainer.classList.add("flex-container", "flex");
-        
-        // Add heading
-        const heading = document.createElement("h4");
-        heading.textContent = "OpenRouter Multiple API Keys";
-        flexContainer.appendChild(heading);
-        
-        // Create textarea for API keys
-        const textarea = document.createElement("textarea");
-        textarea.classList.add("text_pole", "textarea_compact", "autoSetHeight");
-        textarea.placeholder = "API Keys";
-        textarea.style.height = "100px";
-        textarea.id = "api_key_openrouter_custom";
-        
-        // Add event listener for changes
-        textarea.addEventListener("change", () => {
-            const keys = textarea.value
-                .split(/[\n;]/)
-                .map(k => k.trim())
-                .filter(k => k.length > 0);
-            
-            textarea.value = keys.join("\n");
-            
-            if (keys.length === 0) {
-                return void saveKey(CUSTOM_KEYS_KEY, keys.join("\n"));
-            }
-            
-            const firstKey = keys[0];
-            secretsFunctions.writeSecret("api_key_openrouter", firstKey);
-            saveKey(CUSTOM_KEYS_KEY, keys.join("\n"));
-        });
-        
-        // Set initial value
-        textarea.value = secrets[CUSTOM_KEYS_KEY] || "";
-        flexContainer.appendChild(textarea);
-        
-        // Create info panel
-        const infoPanel = document.createElement("div");
-        const infoPanelHeading = document.createElement("h4");
-        infoPanelHeading.textContent = "Key Usage Information:";
-        infoPanel.appendChild(infoPanelHeading);
-        
-        // Current key display
-        const currentKeyDiv = document.createElement("div");
-        currentKeyDiv.textContent = `Current: ${secrets.api_key_openrouter || ""}`;
-        currentKeyDiv.id = "current_key_openrouter";
-        
-        // Last used key display
-        const lastKeyDiv = document.createElement("div");
-        const lastKey = secrets[CUSTOM_KEYS_KEY]?.split("\n").pop() || "";
-        lastKeyDiv.textContent = `Last: ${lastKey}`;
-        lastKeyDiv.id = "last_key_openrouter";
-        
-        // Key switching status
-        const switchStatusDiv = document.createElement("div");
-        switchStatusDiv.textContent = `Key Switching: ${keySwitchingEnabled ? "On" : "Off"}`;
-        switchStatusDiv.id = "switch_key_openrouter";
-        
-        // Error toggle status
-        const errorToggleDiv = document.createElement("div");
-        errorToggleDiv.textContent = `Error Details: ${showErrorDetails ? "On" : "Off"}`;
-        errorToggleDiv.id = "show_openrouter_error";
-        
-        // Add elements to info panel
-        infoPanel.appendChild(currentKeyDiv);
-        infoPanel.appendChild(lastKeyDiv);
-        infoPanel.appendChild(switchStatusDiv);
-        infoPanel.appendChild(errorToggleDiv);
-        
-        // Add panels to form
-        openrouterForm.appendChild(infoPanel);
-        openrouterForm.appendChild(flexContainer);
-        
-        // Create buttons
-        const saveKeysButton = await createButton("Save Keys", async () => {
-            const keys = textarea.value
-                .split(/[\n;]/)
-                .map(k => k.trim())
-                .filter(k => k.length > 0);
-            
-            textarea.value = keys.join("\n");
-            
-            if (keys.length === 0) {
-                return void saveKey(CUSTOM_KEYS_KEY, keys.join("\n"));
-            }
-            
-            const firstKey = keys[0];
-            secretsFunctions.writeSecret("api_key_openrouter", firstKey);
-            saveKey(CUSTOM_KEYS_KEY, keys.join("\n"));
-        });
-        
-        const keySwitchingButton = await createButton("Key Switching Settings", async () => {
-            keySwitchingEnabled = !keySwitchingEnabled;
-            localStorage.setItem("switch_key_openrouter", keySwitchingEnabled.toString());
-            switchStatusDiv.textContent = `Key Switching: ${keySwitchingEnabled ? "On" : "Off"}`;
-        });
-        
-        const viewErrorButton = await createButton("View Error Info", async () => {
-            showErrorPopup();
-        });
-        
-        const errorToggleButton = await createButton("Error Details Toggle", async () => {
-            showErrorDetails = !showErrorDetails;
-            localStorage.setItem("show_openrouter_error", showErrorDetails.toString());
-            errorToggleDiv.textContent = `Error Details: ${showErrorDetails ? "On" : "Off"}`;
-        });
-        
-        // Create button container
-        const buttonContainer = document.createElement("div");
-        buttonContainer.classList.add("flex-container", "flex");
-        buttonContainer.appendChild(saveKeysButton);
-        buttonContainer.appendChild(keySwitchingButton);
-        buttonContainer.appendChild(viewErrorButton);
-        buttonContainer.appendChild(errorToggleButton);
-        
-        // Add button container to form
-        openrouterForm.appendChild(buttonContainer);
-        openrouterForm.appendChild(document.createElement("hr"));
+    // Find the OpenRouter settings form
+    const openrouterForm = $("#openai_settings_form"); // Corrected ID likely includes openai
+    if (!openrouterForm.length) {
+         console.warn("OpenRouterKeySwitcher: Could not find #openai_settings_form element. UI will not be added.");
+        return; // Exit if the form isn't found
     }
     
-    // Setup event listeners
-    scriptFunctions.eventSource.on(scriptFunctions.event_types.CHAT_COMPLETION_SETTINGS_READY, handleKeyRotation);
-    scriptFunctions.eventSource.on(scriptFunctions.event_types.CHATCOMPLETION_MODEL_CHANGED, async (model) => {
-        if (isOpenRouterSource()) {
-            await saveKey("api_key_openrouter_model", model);
-        }
-    });
-});
+    // --- Create and Inject UI Elements --- 
+    console.log("OpenRouterKeySwitcher: Found form, adding UI elements...");
+    
+    // Create container for our extension's settings
+    const extensionContainer = document.createElement("div");
+    extensionContainer.id = "openrouter-key-switcher-settings";
+    extensionContainer.style.border = "1px solid #ccc";
+    extensionContainer.style.padding = "10px";
+    extensionContainer.style.marginTop = "15px";
+    extensionContainer.style.marginBottom = "15px";
+
+    const heading = document.createElement("h4");
+    heading.textContent = "OpenRouter Key Switcher";
+    extensionContainer.appendChild(heading);
+
+    // Textarea for multiple API keys
+    const keyListLabel = document.createElement("label");
+    keyListLabel.textContent = "OpenRouter Keys (one per line or separated by ;):";
+    keyListLabel.style.display = "block";
+    keyListLabel.style.marginBottom = "5px";
+    extensionContainer.appendChild(keyListLabel);
+
+    const textarea = document.createElement("textarea");
+    textarea.classList.add("text_pole", "textarea_compact"); // Removed autoSetHeight if not needed
+    textarea.placeholder = "sk-or-v1-...\nsk-or-v1-...";
+    textarea.style.height = "80px"; // Adjusted height
+    textarea.style.width = "100%";
+    textarea.style.marginBottom = "10px";
+    textarea.id = "api_key_openrouter_custom";
+    textarea.value = secrets[CUSTOM_KEYS_KEY] || ""; // Load saved keys
+    extensionContainer.appendChild(textarea);
+
+    // Save Keys Button (associated with textarea changes)
+    const saveKeysButton = document.createElement("button");
+    saveKeysButton.textContent = "Save Key List";
+    saveKeysButton.classList.add("menu_button");
+    saveKeysButton.style.marginBottom = "10px";
+    saveKeysButton.onclick = async () => {
+        const keys = textarea.value
+            .split(/[\n;]/)
+            .map(k => k.trim())
+            .filter(k => k.length > 0);
+        
+        textarea.value = keys.join("\n"); // Normalize display
+        await saveKey(CUSTOM_KEYS_KEY, keys.join("\n"), false); // Save the list
+        // Maybe set the first key as active if the list was previously empty?
+        // const currentSecrets = await getSecrets();
+        // if (!currentSecrets.api_key_openrouter && keys.length > 0) {
+        //    await secretsFunctions.writeSecret("api_key_openrouter", keys[0]);
+        //    await scriptFunctions.saveSettingsDebounced();
+        //    await updateCurrentKeyDisplay();
+        // }
+        toastr.success("OpenRouter key list saved.");
+    };
+    extensionContainer.appendChild(saveKeysButton);
+
+    // Key Status Display Area
+    const statusArea = document.createElement("div");
+    statusArea.style.marginTop = "10px";
+    statusArea.style.marginBottom = "10px";
+
+    const currentKeyDisplay = document.createElement("div");
+    currentKeyDisplay.id = "current_key_openrouter";
+    currentKeyDisplay.style.fontSize = "0.9em";
+    currentKeyDisplay.textContent = "Current Key: Loading...";
+    statusArea.appendChild(currentKeyDisplay);
+
+    const lastKeyDisplay = document.createElement("div");
+    lastKeyDisplay.id = "last_key_openrouter";
+    lastKeyDisplay.style.fontSize = "0.9em";
+    const lastKey = localStorage.getItem("last_rotated_key_openrouter") || "N/A";
+    const maskedLastKey = lastKey.length > 8 ? `${lastKey.substring(0, 4)}...${lastKey.substring(lastKey.length - 4)}` : lastKey;
+    lastKeyDisplay.textContent = `Previous Key: ${maskedLastKey}`;
+    statusArea.appendChild(lastKeyDisplay);
+    extensionContainer.appendChild(statusArea);
+
+    // Manual Rotate Button
+    const rotateButton = document.createElement("button");
+    rotateButton.textContent = "Manually Rotate Key";
+    rotateButton.classList.add("menu_button");
+    rotateButton.style.marginRight = "10px";
+    rotateButton.onclick = async () => {
+        console.log("OpenRouterKeySwitcher: Manual rotation triggered.");
+        await handleKeyRotation(); // Attempt rotation
+        await updateCurrentKeyDisplay(); // Update display regardless of outcome
+    };
+    extensionContainer.appendChild(rotateButton);
+
+    // Toggle: Enable/Disable Automatic Key Switching
+    const keySwitchToggleLabel = document.createElement("label");
+    keySwitchToggleLabel.style.marginLeft = "15px"; 
+    keySwitchToggleLabel.style.cursor = "pointer";
+    const keySwitchToggleCheckbox = document.createElement("input");
+    keySwitchToggleCheckbox.type = "checkbox";
+    keySwitchToggleCheckbox.checked = keySwitchingEnabled;
+    keySwitchToggleCheckbox.id = "toggle_auto_key_switch";
+    keySwitchToggleCheckbox.onchange = () => {
+        keySwitchingEnabled = keySwitchToggleCheckbox.checked;
+        localStorage.setItem("switch_key_openrouter", keySwitchingEnabled.toString());
+        console.log(`OpenRouterKeySwitcher: Automatic key switching ${keySwitchingEnabled ? 'enabled' : 'disabled'}`);
+        toastr.info(`Automatic key switching ${keySwitchingEnabled ? 'enabled' : 'disabled'}`);
+    };
+    keySwitchToggleLabel.appendChild(keySwitchToggleCheckbox);
+    keySwitchToggleLabel.appendChild(document.createTextNode(" Auto-Rotate on Error"));
+    extensionContainer.appendChild(keySwitchToggleLabel);
+
+    // Toggle: Show/Hide Error Details Popup
+    const errorDetailsToggleLabel = document.createElement("label");
+    errorDetailsToggleLabel.style.marginLeft = "15px"; 
+    errorDetailsToggleLabel.style.cursor = "pointer";
+    const errorDetailsToggleCheckbox = document.createElement("input");
+    errorDetailsToggleCheckbox.type = "checkbox";
+    errorDetailsToggleCheckbox.checked = showErrorDetails;
+    errorDetailsToggleCheckbox.id = "toggle_error_details_popup";
+    errorDetailsToggleCheckbox.onchange = () => {
+        showErrorDetails = errorDetailsToggleCheckbox.checked;
+        localStorage.setItem("show_openrouter_error", showErrorDetails.toString());
+        console.log(`OpenRouterKeySwitcher: Show error details popup ${showErrorDetails ? 'enabled' : 'disabled'}`);
+        toastr.info(`Error details popup ${showErrorDetails ? 'enabled' : 'disabled'}`);
+    };
+    errorDetailsToggleLabel.appendChild(errorDetailsToggleCheckbox);
+    errorDetailsToggleLabel.appendChild(document.createTextNode(" Show Error Popup"));
+    extensionContainer.appendChild(errorDetailsToggleLabel);
+    
+    // Inject the container into the form
+    // Try to insert it after the main API key input for better context
+    const apiKeyInput = $("#api_key_openai"); // Standard OpenAI key input ID
+    if (apiKeyInput.length) {
+        apiKeyInput.closest(".form-group").after(extensionContainer);
+    } else {
+        // Fallback: append to the end of the form
+        openrouterForm.append(extensionContainer);
+    }
+
+    // Initial update for the current key display
+    await updateCurrentKeyDisplay(); 
+    console.log("OpenRouterKeySwitcher: UI injection and initial setup complete.");
+
+    // Remove potentially problematic old event listeners if they existed
+    // scriptFunctions.eventSource.off(scriptFunctions.event_types.CHAT_COMPLETION_SETTINGS_READY, handleKeyRotation);
+    // scriptFunctions.eventSource.off(scriptFunctions.event_types.CHATCOMPLETION_MODEL_CHANGED);
+
+}); // End jQuery ready
+
 
 // Export the plugin's init function
-export default exports.default; 
+export default init; 
