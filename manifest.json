@@ -1,12 +1,12 @@
 {
-	"display_name": "OpenRouterKeySwitcher",
+	"display_name": "KeySwitcher",
 	"loading_order": 100,
 	"requires": [],
 	"optional": [],
 	"js": "OpenRouterKeySwitcher.js",
 	"css": "",
-	"author": "LovemakingWithAIMares",
-	"version": "0.0.1",
-	"homePage": "https://github.com/MLPChag/STOpenRouterKeySwitcher",
+	"author": "no",
+	"version": "1.0",
+	"homePage": "https://github.com/fdoremi/STOpenR",
 	"auto_update": true
 }
