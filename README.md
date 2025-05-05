@@ -1,11 +1,12 @@
-# SillyTavern Multi-Provider API Key Switcher
+# SillyTavern Multi-Provider API Key Switcher with Sets
 
-Manage and automatically rotate/remove multiple API keys for various AI providers in SillyTavern. Handles rate limits, depleted credits, and invalid keys.
+Manage , organize into active and inactive sets, and automatically rotate/remove multiple API keys for various AI providers in SillyTavern. Handles rate limits, depleted credits, invalid keys. Useful for multiple accounts or keys with varying traits.
 
 ## Features
-
 *   Input multiple backup keys per provider.
 *   Toggle automatic key rotation (before request) and removal (on specific errors like 401, 403, 429, invalid key).
+*   Organize API keys into multiple named sets per provider (e.g., "Default", "2nd account", "High Quota").
+*   Choose which set of keys is currently active for rotation and use.
 *   Provider-specific error details in popups.
 *   Manual controls per provider.
 
