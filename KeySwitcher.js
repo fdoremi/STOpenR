@@ -611,13 +611,17 @@ async function redrawProviderUI(provider, data) {
     recycleBinSection.appendChild(recycleHeader);
 
     // Collapsible logic
-    let recycleCollapsed = true;
+    // --- Collapsible state persistence ---
+    const collapseKey = `keyswitcher-recycle-collapsed-${provider.secret_key}`;
+    let recycleCollapsed = localStorage.getItem(collapseKey) !== 'false'; // default true (collapsed)
     const binContent = document.createElement("div");
     binContent.style.display = recycleCollapsed ? "none" : "block";
     recycleHeader.onclick = () => {
         recycleCollapsed = !recycleCollapsed;
+        localStorage.setItem(collapseKey, recycleCollapsed);
         binContent.style.display = recycleCollapsed ? "none" : "block";
     };
+
     recycleBinSection.appendChild(binContent);
 
     // Load and render bin
@@ -668,6 +672,8 @@ async function redrawProviderUI(provider, data) {
                     const bin = loadRecycleBin(provider);
                     bin.splice(idx, 1);
                     saveRecycleBin(provider, bin);
+                    // Persist collapse state and force open after redraw
+                    localStorage.setItem(collapseKey, 'false');
                     await redrawProviderUI(provider, d);
                     await updateProviderInfoPanel(provider, d);
                 } else {
@@ -679,6 +685,8 @@ async function redrawProviderUI(provider, data) {
                 const bin = loadRecycleBin(provider);
                 bin.splice(idx, 1);
                 saveRecycleBin(provider, bin);
+                // Persist collapse state and force open after redraw
+                localStorage.setItem(collapseKey, 'false');
                 redrawProviderUI(provider, data);
             });
             btnRow.appendChild(deleteBtn);

@@ -45,7 +45,7 @@ OpenRouter, Anthropic (Claude), OpenAI, Google AI Studio (Gemini), DeepSeek, Xai
 
 ## To-Do
 * Add options to customize automatic action (remove vs. rotate) based on error type (e.g., 401 vs 429).
-* Implement a "recycle bin" for removed keys, showing removal reason and allowing manual restore or permanent deletion.
+* Recycle bin - actually detect the error codes/reasons for removal
 * Enable assigning specific key sets to characters for automatic switching on character load.
 -------------------------------------------------------------------------------------------------------------------------
 * Track message count/history per key.
