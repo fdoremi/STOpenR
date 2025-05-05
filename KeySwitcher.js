@@ -757,7 +757,7 @@ jQuery(async () => {
                     if (isRemovalStatusCode || isRemovalMessage) {
                         console.log(`KeySwitcher: Removal trigger matched for ${provider.name}. Attempting removal...`);
                         const newKey = await handleKeyRemoval(provider, failedKey); // Returns null for now
-                        if (newKey !== null) { 
+                        if (newKey !== null) {
                              keyRemoved = true;
                              removedKeyValue = failedKey;
                              console.log(`KeySwitcher: Key ${failedKey} supposedly removed, new key is ${newKey}`);
@@ -824,12 +824,45 @@ jQuery(async () => {
                 topLevelContainer.style.padding = "10px";
                 topLevelContainer.style.borderRadius = "5px";
 
-                // --- Heading ---
+                // --- Collapsible Header ---
+                const collapsedKey = `keyswitcher_collapsed_${provider.secret_key}`;
+                let isCollapsed = localStorage.getItem(collapsedKey) === "true";
+                const headerBar = document.createElement("div");
+                headerBar.style.display = "flex";
+                headerBar.style.alignItems = "center";
+                headerBar.style.cursor = "pointer";
+                headerBar.style.userSelect = "none";
+                headerBar.style.marginBottom = "8px";
+                headerBar.style.gap = "8px";
+
+                const chevron = document.createElement("span");
+                chevron.textContent = isCollapsed ? "▶" : "▼";
+                chevron.style.fontSize = "18px";
+                chevron.style.transition = "transform 0.2s";
+                chevron.style.marginRight = "4px";
+
                 const heading = document.createElement("h4");
                 heading.textContent = `${provider.name} - Key Set Manager`;
-                heading.style.marginTop = "0px";
-                heading.style.marginBottom = "10px";
-                topLevelContainer.appendChild(heading);
+                heading.style.margin = "0";
+                heading.style.flex = "1";
+                heading.style.fontWeight = "bold";
+
+                headerBar.appendChild(chevron);
+                headerBar.appendChild(heading);
+                topLevelContainer.appendChild(headerBar);
+
+                // --- Collapsible content wrapper ---
+                const collapsibleContent = document.createElement("div");
+                collapsibleContent.style.display = isCollapsed ? "none" : "block";
+                // All further UI will be appended to collapsibleContent, not topLevelContainer directly
+
+                // Toggle logic
+                headerBar.addEventListener("click", () => {
+                    isCollapsed = !isCollapsed;
+                    collapsibleContent.style.display = isCollapsed ? "none" : "block";
+                    chevron.textContent = isCollapsed ? "▶" : "▼";
+                    localStorage.setItem(collapsedKey, isCollapsed ? "true" : "false");
+                });
 
                 // --- Info Panel (with placeholders) ---
                 const infoPanel = document.createElement("div");
@@ -842,7 +875,7 @@ jQuery(async () => {
                 const currentKeyDiv = document.createElement("div"); currentKeyDiv.id = `current_key_${provider.secret_key}`; currentKeyDiv.textContent = "Current Key: Loading..."; infoPanel.appendChild(currentKeyDiv);
                 const switchStatusDiv = document.createElement("div"); switchStatusDiv.id = `switch_key_${provider.secret_key}`; switchStatusDiv.textContent = "Switching: Loading..."; infoPanel.appendChild(switchStatusDiv);
                 const errorToggleDiv = document.createElement("div"); errorToggleDiv.id = `show_${provider.secret_key}_error`; errorToggleDiv.textContent = "Error Details: Loading..."; infoPanel.appendChild(errorToggleDiv);
-                topLevelContainer.appendChild(infoPanel);
+                collapsibleContent.appendChild(infoPanel);
 
                 // --- Global Button Container ---
                 const globalButtonContainer = document.createElement("div");
@@ -873,12 +906,15 @@ jQuery(async () => {
                 globalButtonContainer.appendChild(keySwitchingButton);
                 globalButtonContainer.appendChild(rotateManuallyButton);
                 globalButtonContainer.appendChild(errorToggleButton);
-                topLevelContainer.appendChild(globalButtonContainer);
+                collapsibleContent.appendChild(globalButtonContainer);
 
                 // --- Dynamic Sets Container (Placeholder) ---
                 const dynamicSetsContainer = document.createElement("div");
                 dynamicSetsContainer.id = `keyswitcher-sets-dynamic-${provider.secret_key}`;
-                topLevelContainer.appendChild(dynamicSetsContainer);
+                collapsibleContent.appendChild(dynamicSetsContainer);
+
+                // Add the collapsible content to the main container
+                topLevelContainer.appendChild(collapsibleContent);
 
                 // --- Inject UI ---
                 console.log(`KeySwitcher: Attempting to inject UI for ${provider.name}`);
