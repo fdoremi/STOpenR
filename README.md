@@ -32,10 +32,22 @@ OpenRouter, Anthropic (Claude), OpenAI, Google AI Studio (Gemini), DeepSeek, Xai
 
 1.  Go to API Connections > select provider.
 2.  Ensure `allowKeysExposure` is `true` in your config.
-3.  Find the "**Multiple API Keys**" section below the main settings.
-4.  Add alternate keys (one per line/; separated).
-5.  Use "**Toggle Switching**" to enable auto-rotation/removal for that provider.
+3.  Find the "**Key Set Manager**" section below the main settings.
+4.  If wanted, use ***Add New Set*** to create a new set, and then name it. If not, click within ***Default*** textbox.  
+4.  Add alternate keys (one per line/; separated) to chosen set.
+5.  Click ***Activate Set** to make wanted set active. Only one set may be active at a time. 
+6.  Click ***Delete Set** to remove desired set.
+7.  Use "**Toggle Switching**" to enable auto-rotation/removal for that provider. Keys can currently only be rotated when toggle is set on. 
 
 ---
 
 *Manage keys responsibly.*
+
+## TODO
+* Add options to customize automatic action (remove vs. rotate) based on error type (e.g., 401 vs 429).
+* Implement a "recycle bin" for removed keys, showing removal reason and allowing manual restore or permanent deletion.
+* Enable assigning specific key sets to characters for automatic switching on character load.
+-------------------------------------------------------------------------------------------------------------------------
+* Track message count/history per key.
+* Add option for keys removed due to quota limits to automatically restore after a set time (e.g., 24h).
+* Integrate with external proxy tools to switch system proxy based on the active key set.
