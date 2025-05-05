@@ -100,7 +100,65 @@ const PROVIDERS = {
 };
 
 // Provider-specific error details
-const PROVIDER_ERROR_MAPPINGS = { /* ...unchanged from original... */ };
+const PROVIDER_ERROR_MAPPINGS = {
+    [SECRET_KEYS.CLAUDE]: {
+        name: "Anthropic (Claude)",
+        codes: {
+            400: "Invalid Request: Check the format or content of your request.",
+            401: "Authentication Error: Check your API key.",
+            403: "Permission Error: Your API key lacks permission for this resource.",
+            404: "Not Found: The requested resource was not found.",
+            413: "Request Too Large: Request exceeds the maximum size.",
+            429: "Rate Limit Error: Your account has hit a rate limit.",
+            500: "API Error: An unexpected internal error occurred."
+        }
+    },
+    [SECRET_KEYS.OPENAI]: {
+        name: "OpenAI",
+        codes: {
+            401: "Authentication Error: Invalid API key or organization.",
+            403: "Permission Denied: Country, region, or territory not supported, or other permission issue.",
+            429: "Rate Limit/Quota Exceeded: Too many requests or ran out of credits.",
+            500: "Server Error: Issue on OpenAI's servers.",
+            503: "Service Unavailable: Engine overloaded or high traffic."
+        }
+    },
+    [SECRET_KEYS.MAKERSUITE]: {
+        name: "Google AI Studio (Gemini)",
+        codes: {
+            400: "Invalid Argument/Failed Precondition: Malformed request or billing/region issue for free tier.",
+            403: "Permission Denied: API key lacks permissions or issue with tuned model auth.",
+            404: "Not Found: Requested resource (e.g., file) wasn't found.",
+            429: "Resource Exhausted: Rate limit exceeded.",
+            500: "Internal Error: Unexpected error on Google's side (e.g., context too long).",
+            503: "Service Unavailable: Service temporarily overloaded or down.",
+            504: "Deadline Exceeded: Request took too long (e.g., context too large)."
+        }
+    },
+    [SECRET_KEYS.DEEPSEEK]: {
+        name: "DeepSeek",
+        codes: {
+            401: "Unauthorized: Check your API key and authentication headers.",
+            429: "Too Many Requests: Reduce request rate or upgrade plan.",
+            500: "Server Error: Retry the request after a short delay.",
+            503: "Service Unavailable: Check status page."
+        }
+    },
+    [SECRET_KEYS.XAI]: {
+        name: "Xai (Grok)",
+        codes: {
+            400: "Bad Request: Invalid argument or incorrect API key supplied.",
+            401: "Unauthorized: Missing or invalid authorization token.",
+            403: "Forbidden: API key lacks permission or is blocked.",
+            404: "Not Found: Model not found or invalid endpoint URL.",
+            405: "Method Not Allowed: Incorrect HTTP method used.",
+            415: "Unsupported Media Type: Empty request body or missing Content-Type header.",
+            422: "Unprocessable Entity: Invalid format for a field in the request body.",
+            429: "Too Many Requests: Rate limit reached."
+        }
+    }
+};
+
 // Removal Triggers
 const REMOVAL_STATUS_CODES = [400, 401, 403, 404, 429];
 const REMOVAL_MESSAGE_REGEX = /Unauthorized|Forbidden|Permission|Invalid|Exceeded|Internal/i;
