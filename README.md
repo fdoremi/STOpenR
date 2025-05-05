@@ -43,7 +43,7 @@ OpenRouter, Anthropic (Claude), OpenAI, Google AI Studio (Gemini), DeepSeek, Xai
 
 *Manage keys responsibly.*
 
-## TODO
+## To-Do
 * Add options to customize automatic action (remove vs. rotate) based on error type (e.g., 401 vs 429).
 * Implement a "recycle bin" for removed keys, showing removal reason and allowing manual restore or permanent deletion.
 * Enable assigning specific key sets to characters for automatic switching on character load.
