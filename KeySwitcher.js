@@ -157,7 +157,6 @@ const PROVIDER_ERROR_MAPPINGS = {
             429: "Too Many Requests: Rate limit reached."
         }
     },
-     // Gemini was adamant that I add this
      // Add mappings for OpenRouter if needed, might have generic or passthrough codes
     [SECRET_KEYS.OPENROUTER]: {
         name: "OpenRouter",
@@ -217,7 +216,7 @@ function showErrorPopup(provider, errorMessage, errorTitle = "API Error", wasKey
     popupFunctions.callGenericPopup(popupContent, popupFunctions.POPUP_TYPE.TEXT, "", { large: true, wide: true, allowVerticalScrolling: true });
 }
 
-// Initialize the plugin (Placeholder for now)
+// Initialize the plugin
 async function init(loadedSecrets) {
     console.log("MultiProviderKeySwitcher init function called.");
 }
@@ -502,11 +501,6 @@ async function handleKeyRemoval(provider, failedKey) {
 }
 
 
-// --- Redundant saveKey function (can be removed later) ---
-async function saveKey(key, value, updateDisplay = true) {
-     console.log("KeySwitcher: saveKey called - likely redundant now:", key);
-}
-
 // Get secrets from the server
 async function getSecrets() {
     try {
@@ -741,7 +735,7 @@ async function redrawProviderUI(provider, data) {
 jQuery(async () => {
     console.log("MultiProviderKeySwitcher: Initializing...");
 
-    // Override toastr.error (handleKeyRotation/Removal calls are still placeholders)
+    // Override toastr.error to intercept API errors and handle key switching/removal
     const originalToastrError = toastr.error;
     toastr.error = async function(...args) {
         originalToastrError(...args);
@@ -762,9 +756,8 @@ jQuery(async () => {
                     const isRemovalMessage = REMOVAL_MESSAGE_REGEX.test(errorMessage);
                     if (isRemovalStatusCode || isRemovalMessage) {
                         console.log(`KeySwitcher: Removal trigger matched for ${provider.name}. Attempting removal...`);
-                        // !!! handleKeyRemoval needs refactoring before this works !!!
                         const newKey = await handleKeyRemoval(provider, failedKey); // Returns null for now
-                        if (newKey !== null) { // This check won't pass until handleKeyRemoval is fixed
+                        if (newKey !== null) { 
                              keyRemoved = true;
                              removedKeyValue = failedKey;
                              console.log(`KeySwitcher: Key ${failedKey} supposedly removed, new key is ${newKey}`);
@@ -773,7 +766,6 @@ jQuery(async () => {
                         }
                     } else {
                         console.log(`KeySwitcher: Error for ${provider.name} (Switching ON) did not match removal triggers. Rotating...`);
-                        // !!! handleKeyRotation needs refactoring before this works !!!
                         await handleKeyRotation(provider.secret_key);
                     }
                 } else if (failedKey) {
@@ -867,7 +859,6 @@ jQuery(async () => {
                 });
                 const rotateManuallyButton = createButton("Rotate Key in Active Set Now", async () => {
                     console.log(`KeySwitcher: Manual rotation requested for ${provider.name}`);
-                     // !!! handleKeyRotation needs refactoring !!!
                     await handleKeyRotation(provider.secret_key);
                     const currentSecrets = await getSecrets() || {};
                     await updateProviderInfoPanel(provider, loadSetData(provider, currentSecrets)); // Update panel after attempt
@@ -924,7 +915,7 @@ jQuery(async () => {
         }
     } // --- End of provider loop ---
 
-    // --- Event Listeners (Keep as is, rotation calls are placeholders) ---
+    // --- Event Listeners ---
     scriptFunctions.eventSource.on(scriptFunctions.event_types.CHATCOMPLETION_MODEL_CHANGED, async (model) => { /* ...unchanged... */ });
     scriptFunctions.eventSource.on(scriptFunctions.event_types.CHAT_COMPLETION_SETTINGS_READY, async () => {
         console.log("KeySwitcher: Chat completion settings ready, checking for initial key rotation...");
@@ -934,7 +925,6 @@ jQuery(async () => {
                 if (isProviderSource(provider)) {
                     if (keySwitchingEnabled[provider.secret_key]) {
                         console.log(`KeySwitcher: Provider ${provider.name} is active and switching is enabled. Attempting initial key rotation.`);
-                        // !!! handleKeyRotation needs refactoring !!!
                         await handleKeyRotation(provider.secret_key);
                         // Optionally update panel after rotation attempt
                         const currentSecrets = await getSecrets() || {};
