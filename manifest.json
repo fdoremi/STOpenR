@@ -1,12 +1,12 @@
 {
-	"display_name": "KeySwitcher",
-	"loading_order": 100,
-	"requires": [],
-	"optional": [],
-	"js": "KeySwitcher.js",
-	"css": "",
-	"author": "no",
-	"version": "1.1",
-	"homePage": "https://github.com/fdoremi/STOpenR",
-	"auto_update": true
+    "display_name": "KeySwitcher with Sets",
+    "loading_order": 101,
+    "requires": [],
+    "optional": [],
+    "js": "KeySwitcher.js",
+    "css": "",
+    "author": "no",
+    "version": "1.2",
+    "homePage": "github.com/funny-vape-lover",
+    "auto_update": true
 }
