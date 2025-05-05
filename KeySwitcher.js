@@ -407,7 +407,20 @@ async function handleKeyRotation(providerKey) {
  * @param {string} failedKey The API key that failed and should be removed.
  * @returns {Promise<string|null>} The new key activated after removal, or null if no key was removed/no other keys are available.
  */
-async function handleKeyRemoval(provider, failedKey) {
+// --- Recycle Bin Utilities ---
+function getRecycleBinKey(provider) {
+    return `keyswitcher_recycle_bin_${provider.secret_key}`;
+}
+function loadRecycleBin(provider) {
+    try {
+        return JSON.parse(localStorage.getItem(getRecycleBinKey(provider))) || [];
+    } catch { return []; }
+}
+function saveRecycleBin(provider, bin) {
+    localStorage.setItem(getRecycleBinKey(provider), JSON.stringify(bin));
+}
+
+async function handleKeyRemoval(provider, failedKey, reason = "Unknown") {
     console.log(`KeySwitcher: Attempting removal of key '${failedKey}' for ${provider.name}.`);
 
     // Load the current set data
@@ -442,6 +455,16 @@ async function handleKeyRemoval(provider, failedKey) {
 
     // --- Key WAS found - Proceed with removal ---
     console.log(`KeySwitcher: Found key '${failedKey}' at index ${failedKeyIndex} in active set '${activeSet.name}'. Removing...`);
+
+    // --- Add to recycle bin ---
+    const recycleBin = loadRecycleBin(provider);
+    recycleBin.push({
+        key: failedKey,
+        set: activeSet.name,
+        reason,
+        removedAt: new Date().toISOString()
+    });
+    saveRecycleBin(provider, recycleBin);
 
     // Remove the key from the array
     keysInActiveSet.splice(failedKeyIndex, 1); // Remove 1 element at failedKeyIndex
@@ -494,7 +517,9 @@ async function handleKeyRemoval(provider, failedKey) {
 
 
     // Update our info panel display to reflect the changes
-    await updateProviderInfoPanel(provider, data); // Use the modified data object
+    await updateProviderInfoPanel(provider, data);
+    // Also update the dynamic UI (recycle bin, sets, etc) immediately
+    await redrawProviderUI(provider, data);
 
     // Return the key that was activated
     return newKeyToActivate;
@@ -555,7 +580,6 @@ async function updateProviderInfoPanel(provider, data) {
 async function redrawProviderUI(provider, data) {
     const dynamicContainerId = `keyswitcher-sets-dynamic-${provider.secret_key}`;
     const dynamicContainer = document.getElementById(dynamicContainerId);
-
     if (!dynamicContainer) {
         console.error(`KeySwitcher: Dynamic container not found for ${provider.name} (ID: ${dynamicContainerId})`);
         return;
@@ -563,6 +587,108 @@ async function redrawProviderUI(provider, data) {
 
     // --- Clear existing UI ---
     dynamicContainer.innerHTML = '';
+
+    // --- Recycle Bin UI ---
+    // Remove previous recycle bin if any
+    const oldBin = document.getElementById(`keyswitcher-recycle-bin-${provider.secret_key}`);
+    if (oldBin) oldBin.remove();
+    const recycleBinSection = document.createElement("div");
+    recycleBinSection.id = `keyswitcher-recycle-bin-${provider.secret_key}`;
+    recycleBinSection.style.marginBottom = "18px";
+    recycleBinSection.style.padding = "8px";
+    recycleBinSection.style.border = "1px dashed #b44";
+    recycleBinSection.style.borderRadius = "4px";
+    recycleBinSection.style.background = "#2a1818";
+
+    const recycleHeader = document.createElement("div");
+    recycleHeader.style.display = "flex";
+    recycleHeader.style.justifyContent = "space-between";
+    recycleHeader.style.alignItems = "center";
+    recycleHeader.style.cursor = "pointer";
+    recycleHeader.style.fontWeight = "bold";
+    recycleHeader.textContent = "🗑️ Recycle Bin (Removed Keys)";
+    recycleHeader.title = "Click to collapse/expand";
+    recycleBinSection.appendChild(recycleHeader);
+
+    // Collapsible logic
+    let recycleCollapsed = true;
+    const binContent = document.createElement("div");
+    binContent.style.display = recycleCollapsed ? "none" : "block";
+    recycleHeader.onclick = () => {
+        recycleCollapsed = !recycleCollapsed;
+        binContent.style.display = recycleCollapsed ? "none" : "block";
+    };
+    recycleBinSection.appendChild(binContent);
+
+    // Load and render bin
+    const recycleBin = loadRecycleBin(provider);
+    if (recycleBin.length === 0) {
+        const empty = document.createElement("div");
+        empty.textContent = "Recycle bin is empty.";
+        empty.style.fontStyle = "italic";
+        binContent.appendChild(empty);
+    } else {
+        recycleBin.forEach((entry, idx) => {
+            const row = document.createElement("div");
+            row.style.display = "flex";
+            row.style.flexDirection = "column";
+            row.style.borderBottom = "1px solid #a44";
+            row.style.padding = "5px 0";
+
+            const keyRow = document.createElement("div");
+            keyRow.textContent = entry.key;
+            keyRow.style.wordBreak = "break-all";
+            keyRow.style.fontSize = "0.95em";
+            keyRow.style.background = "#1a1a1a";
+            keyRow.style.color = "#e0c0c0";
+            keyRow.style.padding = "2px 6px";
+            keyRow.style.marginBottom = "2px";
+            row.appendChild(keyRow);
+
+            const meta = document.createElement("div");
+            meta.style.fontSize = "0.85em";
+            meta.style.color = "#b88";
+            meta.textContent =
+                `Set: ${entry.set} | Reason: ${entry.reason} | Removed: ${new Date(entry.removedAt).toLocaleString()}`;
+            row.appendChild(meta);
+
+            const btnRow = document.createElement("div");
+            btnRow.style.display = "flex";
+            btnRow.style.gap = "8px";
+            btnRow.style.marginTop = "2px";
+            const restoreBtn = createButton("Restore", async () => {
+                // Restore to active set
+                const loadedSecrets = await getSecrets();
+                const d = loadSetData(provider, loadedSecrets);
+                const setIdx = d.sets.findIndex(s => s.name === entry.set);
+                if (setIdx !== -1) {
+                    d.sets[setIdx].keys += (d.sets[setIdx].keys ? "\n" : "") + entry.key;
+                    await saveSetData(provider, d);
+                    // Remove from bin
+                    const bin = loadRecycleBin(provider);
+                    bin.splice(idx, 1);
+                    saveRecycleBin(provider, bin);
+                    await redrawProviderUI(provider, d);
+                    await updateProviderInfoPanel(provider, d);
+                } else {
+                    alert("Original set not found. Key cannot be restored.");
+                }
+            });
+            btnRow.appendChild(restoreBtn);
+            const deleteBtn = createButton("Delete Permanently", () => {
+                const bin = loadRecycleBin(provider);
+                bin.splice(idx, 1);
+                saveRecycleBin(provider, bin);
+                redrawProviderUI(provider, data);
+            });
+            btnRow.appendChild(deleteBtn);
+            row.appendChild(btnRow);
+
+            binContent.appendChild(row);
+        });
+    }
+    // Insert at top
+    dynamicContainer.prepend(recycleBinSection);
 
     // --- Add Separator & Header for Sets Area ---
     const setsAreaHeader = document.createElement("h5");
@@ -756,7 +882,22 @@ jQuery(async () => {
                     const isRemovalMessage = REMOVAL_MESSAGE_REGEX.test(errorMessage);
                     if (isRemovalStatusCode || isRemovalMessage) {
                         console.log(`KeySwitcher: Removal trigger matched for ${provider.name}. Attempting removal...`);
-                        const newKey = await handleKeyRemoval(provider, failedKey); // Returns null for now
+                        // Extract a more meaningful removal reason from errorMessage
+let removalReason = "Unknown";
+try {
+    // Try to extract the error message from JSON if present
+    const jsonMatch = errorMessage.match(/({.*})/);
+    if (jsonMatch && jsonMatch[1]) {
+        const parsed = JSON.parse(jsonMatch[1]);
+        if (parsed && parsed.error && parsed.error.message) {
+            removalReason = parsed.error.message;
+        }
+    } else {
+        // Fallback: use first line or a substring
+        removalReason = errorMessage.split('\n')[0].slice(0, 120);
+    }
+} catch { removalReason = errorMessage.split('\n')[0].slice(0, 120); }
+const newKey = await handleKeyRemoval(provider, failedKey, removalReason); // Pass reason
                         if (newKey !== null) {
                              keyRemoved = true;
                              removedKeyValue = failedKey;
