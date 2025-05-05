@@ -156,12 +156,24 @@ const PROVIDER_ERROR_MAPPINGS = {
             422: "Unprocessable Entity: Invalid format for a field in the request body.",
             429: "Too Many Requests: Rate limit reached."
         }
+    },
+     // Gemini was adamant that I add this
+     // Add mappings for OpenRouter if needed, might have generic or passthrough codes
+    [SECRET_KEYS.OPENROUTER]: {
+        name: "OpenRouter",
+        codes: {
+            // OpenRouter often passes through original errors, but might have its own specific ones
+            401: "Authentication Error: Invalid OpenRouter API key.",
+            402: "Payment Required: Account requires funds or payment method.", // Common for OpenRouter
+            429: "Rate Limit/Quota Exceeded: Too many requests or insufficient credits/budget.",
+            // Add other known common OpenRouter or passthrough codes here
+        }
     }
 };
 
 // Removal Triggers
-const REMOVAL_STATUS_CODES = [400, 401, 403, 404, 429];
-const REMOVAL_MESSAGE_REGEX = /Unauthorized|Forbidden|Permission|Invalid|Exceeded|Internal/i;
+const REMOVAL_STATUS_CODES = [400, 401, 402, 403, 404, 429]; // Added 402 for potential payment issues
+const REMOVAL_MESSAGE_REGEX = /Unauthorized|Forbidden|Permission|Invalid|Exceeded|Internal|budget|payment/i; // Added budget/payment
 
 // Check if current source matches a provider
 const isProviderSource = (provider) => provider.source_check();
