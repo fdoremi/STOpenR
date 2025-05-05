@@ -872,7 +872,17 @@ jQuery(async () => {
                 infoPanel.style.border = "1px dashed #666";
                 infoPanel.style.borderRadius = "4px";
                 const activeSetDiv = document.createElement("div"); activeSetDiv.id = `active_set_info_${provider.secret_key}`; activeSetDiv.textContent = "Active Set: Loading..."; infoPanel.appendChild(activeSetDiv);
-                const currentKeyDiv = document.createElement("div"); currentKeyDiv.id = `current_key_${provider.secret_key}`; currentKeyDiv.textContent = "Current Key: Loading..."; infoPanel.appendChild(currentKeyDiv);
+                const currentKeyDiv = document.createElement("div");
+                currentKeyDiv.id = `current_key_${provider.secret_key}`;
+                currentKeyDiv.textContent = "Current Key: Loading...";
+                // Responsive and non-overflowing styling
+                currentKeyDiv.style.maxWidth = "100%";
+                currentKeyDiv.style.wordBreak = "break-all";
+                currentKeyDiv.style.display = "block";
+                currentKeyDiv.style.margin = "4px 0";
+                currentKeyDiv.style.padding = "2px 6px";
+                currentKeyDiv.style.borderRadius = "3px";
+                infoPanel.appendChild(currentKeyDiv);
                 const switchStatusDiv = document.createElement("div"); switchStatusDiv.id = `switch_key_${provider.secret_key}`; switchStatusDiv.textContent = "Switching: Loading..."; infoPanel.appendChild(switchStatusDiv);
                 const errorToggleDiv = document.createElement("div"); errorToggleDiv.id = `show_${provider.secret_key}_error`; errorToggleDiv.textContent = "Error Details: Loading..."; infoPanel.appendChild(errorToggleDiv);
                 collapsibleContent.appendChild(infoPanel);
