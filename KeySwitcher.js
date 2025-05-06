@@ -1017,12 +1017,28 @@ async function redrawProviderUI(provider, data) {
  * @param {string} errorMessage The main error message string.
  * @param {string} errorTitle The title of the error toast/popup.
  */
+// Keep track of recently removed keys to prevent double removal
+const recentlyRemovedKeys = {};
+const REMOVAL_COOLDOWN_MS = 5000; // 5 seconds
+
 async function processProviderError(provider, errorMessage, errorTitle) {
     console.log(`KeySwitcher: Processing error for provider: ${provider.name}`);
     let keyRemoved = false;
     let removedKeyValue = null;
-    const failedKey = await secretsFunctions.findSecret(provider.secret_key);// Check if switching is enabled AND a key was actually found
-if (failedKey && keySwitchingEnabled[provider.secret_key]) {
+    const failedKey = await secretsFunctions.findSecret(provider.secret_key);
+    
+    // Check if key was already removed recently
+    const keyId = `${provider.secret_key}:${failedKey}`;
+    const now = Date.now();
+    const lastRemovalTime = recentlyRemovedKeys[keyId] || 0;
+    
+    if (now - lastRemovalTime < REMOVAL_COOLDOWN_MS) {
+        console.log(`KeySwitcher: Skipping duplicate removal for ${provider.name}. Key was already removed within the last 5 seconds.`);
+        return;
+    }
+    
+    // Check if switching is enabled AND a key was actually found
+    if (failedKey && keySwitchingEnabled[provider.secret_key]) {
 
     // --- START: Multi-Stage Error Detection Logic ---
     let statusCode = null;
@@ -1053,8 +1069,16 @@ if (failedKey && keySwitchingEnabled[provider.secret_key]) {
              else if (/API key not valid|PERMISSION_DENIED/i.test(combinedErrorText)) { statusCode = 403; detectedReason = `Gemini text match for API Key/Permission mapped to 403`; }
              // Add more Gemini specific text -> code mappings?
          }
+         // Claude specific checks
+         else if (provider.secret_key === SECRET_KEYS.CLAUDE) {
+             // For Claude, Internal Server Error with 500 is often due to authentication issues
+             if (/Internal Server Error/i.test(combinedErrorText)) { 
+                 statusCode = 401; // Treat as authentication error
+                 detectedReason = `Claude specific: Internal Server Error mapped to 401`; 
+             }
+         }
          // General checks (if not already matched by specific provider)
-         else if (/Unauthorized|Invalid API Key|Authentication Error|Invalid Authentication/i.test(combinedErrorText)) { statusCode = 401; detectedReason = `Text match for Auth Error mapped to 401`; }
+         else if (/(Unauthorized|Invalid[\s_\-]?API[\s_\-]?Key|Authentication[\s_\-]?Error|Invalid[\s_\-]?Authentication|invalid[\s_\-]?x[\s_\-]?api[\s_\-]?key|authentication[\s_\-]?error|Check.*connection.*API key|Check.*API key.*connection)/i.test(combinedErrorText)) { statusCode = 401; detectedReason = `Text match for Auth Error mapped to 401`; }
          else if (/Rate Limit Exceeded|Too Many Requests|Rate limit reached/i.test(combinedErrorText)) { statusCode = 429; detectedReason = `Text match for Rate Limit mapped to 429`; }
          else if (/Payment Required|Billing issue|budget|credit|insufficient quota/i.test(combinedErrorText)) { statusCode = 402; detectedReason = `Text match for Payment/Billing mapped to 402`; } // Added insufficient quota
          else if (/Forbidden|Permission Denied|Permission Error/i.test(combinedErrorText)) { statusCode = 403; detectedReason = `Text match for Forbidden/Permission mapped to 403`; }
@@ -1063,8 +1087,28 @@ if (failedKey && keySwitchingEnabled[provider.secret_key]) {
          if (statusCode !== null) {
              console.log(`KeySwitcher: Mapped error text to status code ${statusCode} for ${provider.name}.`);
          } else {
-              console.log(`KeySwitcher: No numeric code or recognizable error text pattern found for ${provider.name}.`);
-              detectedReason = (errorMessage || 'Unknown Error').split('\n')[0].slice(0, 100); // Fallback reason
+             // Try parsing JSON error for authentication errors
+             let foundAuthError = false;
+             try {
+                 const jsonMatch = errorMessage?.match(/({.*})/);
+                 if (jsonMatch?.[1]) {
+                     const parsed = JSON.parse(jsonMatch[1]);
+                     const msg = parsed?.error?.message || '';
+                     const typ = parsed?.error?.type || '';
+                     if (/invalid x-api-key|authentication_error|unauthorized/i.test(msg) || /invalid x-api-key|authentication_error|unauthorized/i.test(typ)) {
+                         statusCode = 401;
+                         detectedReason = `JSON error match for Auth Error mapped to 401`;
+                         foundAuthError = true;
+                         console.log(`KeySwitcher: Found authentication error in JSON for ${provider.name}. Treating as 401.`);
+                     }
+                 }
+             } catch (jsonErr) {
+                 // Ignore JSON parse errors
+             }
+             if (!foundAuthError) {
+                 console.log(`KeySwitcher: No numeric code or recognizable error text pattern found for ${provider.name}.`);
+                 detectedReason = (errorMessage || 'Unknown Error').split('\n')[0].slice(0, 100); // Fallback reason
+             }
          }
     }
 
@@ -1084,7 +1128,10 @@ if (failedKey && keySwitchingEnabled[provider.secret_key]) {
 
             const newKey = await handleKeyRemoval(provider, failedKey, removalReason.slice(0, 150));
             if (newKey !== null) {
-                keyRemoved = true; removedKeyValue = failedKey;
+                keyRemoved = true;
+                removedKeyValue = failedKey;
+                // Record the removal timestamp to prevent duplicates
+                recentlyRemovedKeys[`${provider.secret_key}:${failedKey}`] = Date.now();
                 console.log(`KeySwitcher: Key removal successful for ${provider.name} (${statusCode}). New key: '${newKey || "None"}'.`);
                 toastr.warning(`KeySwitcher removed failing key for ${provider.name} (ending ${failedKey.slice(-4)}) due to error ${statusCode}. ${newKey ? 'Activated next key.' : 'No more keys in set!'}`);
             } else {
@@ -1121,15 +1168,38 @@ jQuery(async () => {
 
     // Override toastr.error to intercept API errors and handle key switching/removal
     const originalToastrError = toastr.error;
+    // Global lock to prevent parallel error processing
+    let errorProcessingLock = false;
+    let lastProcessedErrorTime = 0;
+    const ERROR_PROCESSING_COOLDOWN = 2000; // 2 seconds cooldown
+
     toastr.error = async function(...args) {
         originalToastrError(...args); // Show original toast first
         console.log("KeySwitcher: Toastr Error Args:", args);
-        const [errorMessage, errorTitle] = args; // Capture both arguments
-        let providerHandled = false; // Flag to ensure only one provider handles the error
+        
+        // Check if we're currently processing an error or if one was processed recently
+        const now = Date.now();
+        if (errorProcessingLock) {
+            console.log("KeySwitcher: Error processing already in progress. Skipping.");
+            return;
+        }
+        
+        if (now - lastProcessedErrorTime < ERROR_PROCESSING_COOLDOWN) {
+            console.log(`KeySwitcher: Error was processed within the last ${ERROR_PROCESSING_COOLDOWN/1000} seconds. Skipping.`);
+            return;
+        }
+        
+        // Set the lock
+        errorProcessingLock = true;
+        lastProcessedErrorTime = now;
+        
+        try {
+            const [errorMessage, errorTitle] = args; // Capture both arguments
+            let providerHandled = false; // Flag to ensure only one provider handles the error
 
-        // --- Pass 1: Check based on current settings ---
-        console.log("KeySwitcher: Starting Pass 1 (Check active setting)...");
-        for (const provider of Object.values(PROVIDERS)) {
+            // --- Pass 1: Check based on current settings ---
+            console.log("KeySwitcher: Starting Pass 1 (Check active setting)...");
+            for (const provider of Object.values(PROVIDERS)) {
             if (isProviderSource(provider)) {
                 console.log(`KeySwitcher: Processing error based on active setting: ${provider.name}`);
                 await processProviderError(provider, errorMessage, errorTitle); // Use helper function
@@ -1216,6 +1286,12 @@ jQuery(async () => {
         // --- Final log if no provider could handle it ---
         if(!providerHandled){
             console.log("KeySwitcher: Could not determine provider for this error via settings or deduction.");
+        }
+        } catch (error) {
+            console.error("KeySwitcher: Error during error processing:", error);
+        } finally {
+            // Release the lock so future errors can be processed
+            errorProcessingLock = false;
         }
     }; // End of toastr.error override
 
