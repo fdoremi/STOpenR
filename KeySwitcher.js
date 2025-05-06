@@ -170,6 +170,78 @@ const PROVIDER_ERROR_MAPPINGS = {
     }
 };
 
+// --- START: Error Code Preference Helpers ---
+function getErrorCodePrefsKey(provider) {
+    // Generates a unique key for storing this provider's error preferences in localStorage
+    return `keyswitcher_error_prefs_${provider.secret_key}`;
+}
+
+function loadErrorCodePrefs(provider) {
+    const prefsKey = getErrorCodePrefsKey(provider);
+    const storedPrefs = localStorage.getItem(prefsKey);
+    let prefs = {}; // Initialize as an empty object
+
+    // Try to parse stored preferences if they exist
+    if (storedPrefs) {
+        try {
+            prefs = JSON.parse(storedPrefs);
+            // Basic validation: ensure it's a non-null object
+            if (typeof prefs !== 'object' || prefs === null) {
+                console.warn(`KeySwitcher: Invalid error code prefs format found for ${provider.name}. Resetting to defaults.`);
+                prefs = {}; // Reset if format is wrong
+            }
+        } catch (e) {
+            console.error(`KeySwitcher: Failed to parse error code prefs for ${provider.name}. Resetting. Error:`, e);
+            prefs = {}; // Reset on parsing error
+        }
+    }
+
+    // Ensure all known error codes for this provider have a default ('none') if not already set
+    const providerCodes = PROVIDER_ERROR_MAPPINGS[provider.secret_key]?.codes || {};
+    for (const code in providerCodes) {
+        if (!(code in prefs) || !['rotate', 'remove', 'none'].includes(prefs[code])) {
+             // If the code is missing or has an invalid value, set default to 'none'
+            prefs[code] = 'none';
+        }
+    }
+    // console.log(`KeySwitcher: Loaded error prefs for ${provider.name}:`, prefs); // Optional: for debugging
+    return prefs;
+}
+
+function saveErrorCodePrefs(provider, prefs) {
+    const prefsKey = getErrorCodePrefsKey(provider);
+    try {
+        localStorage.setItem(prefsKey, JSON.stringify(prefs));
+        // console.log(`KeySwitcher: Saved error prefs for ${provider.name}:`, prefs); // Optional: for debugging
+    } catch (e) {
+        console.error(`KeySwitcher: Failed to save error code prefs for ${provider.name}. Error:`, e);
+        // Optionally notify the user?
+        toastr.error(`Failed to save error code preferences for ${provider.name}. Changes might not persist.`, "Save Error");
+    }
+}
+
+/**
+ * Gets the configured action ('rotate', 'remove', or 'none') for a given status code and provider.
+ * Reads the preferences stored via loadErrorCodePrefs.
+ * @param {object} provider The provider object from PROVIDERS.
+ * @param {number | string} statusCode The HTTP status code.
+ * @returns {'rotate'|'remove'|'none'} The configured action. Defaults to 'none'.
+ */
+function getErrorCodeAction(provider, statusCode) {
+    // Return 'none' immediately if no status code is provided
+    if (statusCode === null || statusCode === undefined) {
+         return 'none';
+    }
+    // Load the currently saved preferences for this provider
+    const prefs = loadErrorCodePrefs(provider);
+    // Preferences are keyed by the string representation of the status code
+    const action = prefs[String(statusCode)];
+
+    // Validate the retrieved action; default to 'none' if it's not valid or not found
+    return ['rotate', 'remove'].includes(action) ? action : 'none';
+}
+// --- END: Error Code Preference Helpers ---
+
 // Removal Triggers
 const REMOVAL_STATUS_CODES = [400, 401, 402, 403, 404, 429]; // Added 402 for potential payment issues
 const REMOVAL_MESSAGE_REGEX = /Unauthorized|Forbidden|Permission|Invalid|Exceeded|Internal|budget|payment/i; // Added budget/payment
