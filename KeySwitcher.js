@@ -936,6 +936,73 @@ async function redrawProviderUI(provider, data) {
     dynamicContainer.appendChild(addNewSetButton);
 }
 
+// --- START: Error Code Actions UI (Container & Header Only) 
+const errorActionsSection = document.createElement("div");
+errorActionsSection.id = `keyswitcher-error-actions-${provider.secret_key}`; // Unique ID
+errorActionsSection.style.marginTop = "20px"; // Add more space above this section
+errorActionsSection.style.border = "1px solid #668"; // Use a slightly different border color
+errorActionsSection.style.borderRadius = "4px";
+errorActionsSection.style.padding = "10px";
+
+// --- Collapsible Header for Error Actions ---
+const errorActionsHeader = document.createElement("div");
+errorActionsHeader.style.cursor = "pointer";
+errorActionsHeader.style.fontWeight = "bold";
+errorActionsHeader.style.marginBottom = "8px"; // Space below header when expanded
+errorActionsHeader.style.display = "flex"; // Use flex for alignment
+errorActionsHeader.style.alignItems = "center"; // Align chevron and text vertically
+errorActionsHeader.style.userSelect = "none"; // Prevent text selection on click
+
+// Collapsible state persistence for error section
+const errorCollapseKey = `keyswitcher-error-actions-collapsed-${provider.secret_key}`;
+// Default to collapsed (true) if not 'false' in localStorage
+let errorCollapsed = localStorage.getItem(errorCollapseKey) !== 'false';
+
+errorActionsHeader.title = `Click to ${errorCollapsed ? 'expand' : 'collapse'} Error Code Actions`; // Set initial title
+
+const errorChevron = document.createElement("span");
+errorChevron.textContent = errorCollapsed ? "▶" : "▼"; // Initial chevron state
+errorChevron.style.fontSize = "14px"; // Slightly smaller chevron
+errorChevron.style.marginRight = "6px"; // Space between chevron and text
+errorChevron.style.width = "1em"; // Prevent layout shift when icon changes
+errorChevron.style.textAlign = "center";
+errorActionsHeader.appendChild(errorChevron);
+
+// Add the header text
+errorActionsHeader.appendChild(document.createTextNode("Error Code Actions"));
+
+// --- Content Placeholder (will hold the table later) ---
+const errorContent = document.createElement("div");
+errorContent.id = `keyswitcher-error-content-${provider.secret_key}`; // Add ID for potential targeting
+errorContent.style.display = errorCollapsed ? "none" : "block"; // Set initial visibility based on state
+errorContent.style.marginTop = "5px"; // Space between header and content area
+
+// Add placeholder text for now, to show where the table will go
+errorContent.textContent = "[Error code table options will appear here in the next step]";
+errorContent.style.fontStyle = "italic";
+errorContent.style.color = "#888"; // Dim placeholder text
+
+// --- Click Handler for the Header ---
+errorActionsHeader.onclick = () => {
+    errorCollapsed = !errorCollapsed; // Toggle the state variable
+    // Update localStorage
+    localStorage.setItem(errorCollapseKey, errorCollapsed ? 'true' : 'false');
+    // Toggle content visibility
+    errorContent.style.display = errorCollapsed ? "none" : "block";
+    // Update chevron icon
+    errorChevron.textContent = errorCollapsed ? "▶" : "▼";
+    // Update tooltip title
+    errorActionsHeader.title = `Click to ${errorCollapsed ? 'expand' : 'collapse'} Error Code Actions`;
+};
+
+// Append header and the (currently empty) content div to the section
+errorActionsSection.appendChild(errorActionsHeader);
+errorActionsSection.appendChild(errorContent);
+
+// Finally, append the entire new section to the main dynamic container
+dynamicContainer.appendChild(errorActionsSection);
+// --- END: Error Code Actions UI (Container & Header Only) ---
+
 
 // --- Main Initialization Logic ---
 jQuery(async () => {
