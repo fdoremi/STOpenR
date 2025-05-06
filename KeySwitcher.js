@@ -1012,12 +1012,13 @@ async function redrawProviderUI(provider, data) {
 jQuery(async () => {
     console.log("MultiProviderKeySwitcher: Initializing...");
 
-        // Override toastr.error to intercept API errors and handle key switching/removal
+    // Override toastr.error to intercept API errors and handle key switching/removal
     const originalToastrError = toastr.error;
     toastr.error = async function(...args) {
         originalToastrError(...args); // Show original toast first
         console.log("KeySwitcher: Toastr Error Args:", args);
-        const [errorMessage, errorTitle] = args;
+        const [errorMessage, errorTitle] = args; // Capture both arguments
+
         for (const provider of Object.values(PROVIDERS)) {
             if (isProviderSource(provider)) {
                 console.log(`KeySwitcher: Error occurred while ${provider.name} was active.`);
@@ -1028,32 +1029,77 @@ jQuery(async () => {
                 // Check if switching is enabled AND a key was actually found
                 if (failedKey && keySwitchingEnabled[provider.secret_key]) {
 
-                    // --- START: New Logic using Error Code Preferences ---
-                    // Only parse status code ONCE here
-                    const statusCodeMatch = errorMessage.match(/\b(\d{3})\b/);
+                    // --- START: Corrected Multi-Stage Error Detection Logic ---
                     let statusCode = null;
-                    if (statusCodeMatch) {
-                        statusCode = parseInt(statusCodeMatch[1], 10);
+                    let detectedReason = "Unknown error"; // For logging/recycle bin
+
+                    // 1. Try parsing status code from errorMessage OR errorTitle
+                    const messageMatch = errorMessage?.match(/\b(\d{3})\b/); // Optional chaining for safety
+                    const titleMatch = errorTitle?.match(/\b(\d{3})\b/);
+
+                    if (messageMatch) {
+                        statusCode = parseInt(messageMatch[1], 10);
+                        detectedReason = `Status code ${statusCode} in message`;
+                        console.log(`KeySwitcher: Found status code ${statusCode} in error message.`);
+                    } else if (titleMatch) {
+                        statusCode = parseInt(titleMatch[1], 10);
+                        detectedReason = `Status code ${statusCode} in title`;
+                        console.log(`KeySwitcher: Found status code ${statusCode} in error title.`);
                     }
 
-                    if (statusCode) {
-                        // Get the user-configured action for this specific status code
+                    // 2. If still no numeric code, check for common text patterns
+                    if (statusCode === null) { // Check explicitly for null, 0 could be a code? (unlikely)
+                         console.log(`KeySwitcher: No numeric status code found. Checking text patterns...`);
+                         // Combine error messages safely, handling potential undefined/null
+                         const combinedErrorText = `${errorMessage || ''} ${errorTitle || ''}`;
+
+                         if (/Unauthorized|Invalid API Key|Authentication Error|Invalid Authentication/i.test(combinedErrorText)) {
+                             statusCode = 401; // Map common auth errors to 401
+                             detectedReason = `Text match for Auth Error mapped to 401`;
+                             console.log(`KeySwitcher: Mapped error text to status code 401.`);
+                         } else if (/Rate Limit Exceeded|Too Many Requests|Rate limit reached/i.test(combinedErrorText)) {
+                             statusCode = 429; // Map common rate limit errors to 429
+                             detectedReason = `Text match for Rate Limit mapped to 429`;
+                             console.log(`KeySwitcher: Mapped error text to status code 429.`);
+                         } else if (/Payment Required|Billing issue|budget|credit/i.test(combinedErrorText)) {
+                             statusCode = 402; // Map payment issues
+                             detectedReason = `Text match for Payment/Billing Issue mapped to 402`;
+                             console.log(`KeySwitcher: Mapped error text to status code 402.`);
+                         } else if (/Forbidden|Permission Denied|Permission Error/i.test(combinedErrorText)) {
+                            statusCode = 403; // Map permission issues
+                            detectedReason = `Text match for Forbidden/Permission Error mapped to 403`;
+                            console.log(`KeySwitcher: Mapped error text to status code 403.`);
+                        }
+                         // Add more 'else if' mappings here if other common text errors arise
+                         else {
+                              console.log(`KeySwitcher: No numeric code or recognizable error text pattern found.`);
+                              // Use first line of error message as fallback reason if no code determined
+                              detectedReason = (errorMessage || 'Unknown Error').split('\n')[0].slice(0, 100);
+                         }
+                    }
+
+                    // --- Now, proceed with action based on the determined statusCode (if valid) ---
+                    if (statusCode !== null) { // Only proceed if we determined a code
+                        // Get the user-configured action for this determined status code
                         const action = getErrorCodeAction(provider, statusCode);
-                        console.log(`KeySwitcher: Status code ${statusCode} detected. Configured action: '${action}'`);
+                        console.log(`KeySwitcher: Determined status code ${statusCode}. Configured action: '${action}'`);
 
                         if (action === 'remove') {
                             console.log(`KeySwitcher: Attempting key removal based on action '${action}' for status code ${statusCode}.`);
-                            let removalReason = `Status code ${statusCode}`;
-                            try {
-                                const jsonMatch = errorMessage.match(/({.*})/);
-                                if (jsonMatch && jsonMatch[1]) {
+                            let removalReason = detectedReason; // Start with how we detected it
+                            try { // Try to append specific API message if possible and different from source
+                                const jsonMatch = errorMessage?.match(/({.*})/);
+                                if (jsonMatch?.[1]) {
                                     const parsed = JSON.parse(jsonMatch[1]);
                                     if (parsed?.error?.message) {
-                                        removalReason = `${statusCode}: ${parsed.error.message.slice(0, 100)}`;
+                                        removalReason += `: ${parsed.error.message.slice(0, 100)}`;
                                     }
+                                } else if (!detectedReason.includes(errorMessage?.split('\n')[0])) { // Append if source wasn't msg
+                                     removalReason += `: ${(errorMessage || '').split('\n')[0].slice(0,100)}`;
                                 }
                             } catch {}
-                            const newKey = await handleKeyRemoval(provider, failedKey, removalReason);
+
+                            const newKey = await handleKeyRemoval(provider, failedKey, removalReason.slice(0, 150)); // Pass combined reason
                             if (newKey !== null) {
                                 keyRemoved = true;
                                 removedKeyValue = failedKey;
@@ -1072,11 +1118,10 @@ jQuery(async () => {
                             console.log(`KeySwitcher: Configured action is 'none' for status code ${statusCode}. No automatic key action taken.`);
                         }
                     } else {
-                        // Status code could not be parsed from the error message
-                        console.log(`KeySwitcher: No status code found in error message. No key action taken based on error code preferences.`);
-                        // No fallback action if code not found
+                        // Could not determine a status code (numeric or text mapped)
+                        console.log(`KeySwitcher: Could not determine a relevant status code from the error. No key action taken.`);
                     }
-                    // --- END: New Logic ---
+                    // --- END: Corrected Multi-Stage Logic ---
 
                 } else if (failedKey) {
                     console.log(`KeySwitcher: Error for ${provider.name} occurred, but Key Switching is OFF.`);
@@ -1094,36 +1139,35 @@ jQuery(async () => {
         }
     }; // End of toastr.error override
 
-
+    // Get initial secrets
     const loadedSecrets = await getSecrets();
     if (!loadedSecrets) { console.error("KeySwitcher: Failed to load secrets on initial load. UI setup aborted."); toastr.error("KeySwitcher: Failed to load secrets.", "Init Error"); return; }
-    await init(loadedSecrets);
+    await init(loadedSecrets); // Call original init function
 
     // Process each provider - Setup UI
     for (const provider of Object.values(PROVIDERS)) {
+        // --- Rest of the UI setup loop ---
+        // (This part remains unchanged from the previous working version)
         console.log(`KeySwitcher: Processing provider UI for: ${provider.name}`);
         const formElement = provider.get_form();
 
-        if (formElement) {
+        if (formElement) { // START: if (formElement)
              if (formElement.querySelector(`#keyswitcher-main-${provider.secret_key}`)) {
                 console.log(`KeySwitcher: UI already exists for ${provider.name}. Forcing update.`);
                  try {
                      const data = loadSetData(provider, loadedSecrets);
                      await updateProviderInfoPanel(provider, data);
-                     await redrawProviderUI(provider, data); // Redraw dynamic sets/bin
+                     await redrawProviderUI(provider, data);
                  } catch (updateError) { console.error(`KeySwitcher: Error updating existing UI for ${provider.name}`, updateError); }
                 continue;
             }
 
-            try {
+            try { // START: try create/inject UI
                 const data = loadSetData(provider, loadedSecrets);
                 console.log(`KeySwitcher: ${provider.name} initial data:`, JSON.parse(JSON.stringify(data)));
 
                 const topLevelContainer = document.createElement("div");
-                 topLevelContainer.id = `keyswitcher-main-${provider.secret_key}`;
-                topLevelContainer.classList.add("keyswitcher-provider-container");
-                 topLevelContainer.style.marginTop = "15px"; topLevelContainer.style.border = "1px solid #444"; topLevelContainer.style.padding = "10px"; topLevelContainer.style.borderRadius = "5px";
-
+                 topLevelContainer.id = `keyswitcher-main-${provider.secret_key}`; topLevelContainer.classList.add("keyswitcher-provider-container"); topLevelContainer.style.marginTop = "15px"; topLevelContainer.style.border = "1px solid #444"; topLevelContainer.style.padding = "10px"; topLevelContainer.style.borderRadius = "5px";
                 const collapsedKey = `keyswitcher_collapsed_${provider.secret_key}`;
                 let isCollapsed = localStorage.getItem(collapsedKey) === "true";
                 const headerBar = document.createElement("div");
@@ -1133,159 +1177,53 @@ jQuery(async () => {
                 const heading = document.createElement("h4");
                  heading.textContent = `${provider.name} - Key Set Manager`; heading.style.margin = "0"; heading.style.flex = "1"; heading.style.fontWeight = "bold";
                 headerBar.appendChild(chevron); headerBar.appendChild(heading); topLevelContainer.appendChild(headerBar);
-
                 const collapsibleContent = document.createElement("div");
-                collapsibleContent.id = `keyswitcher-content-${provider.secret_key}`;
-                collapsibleContent.style.display = isCollapsed ? "none" : "block";
-                collapsibleContent.style.transition = "opacity 0.3s ease-out"; collapsibleContent.style.overflow = "hidden";
-                headerBar.addEventListener("click", () => {
-                    isCollapsed = !isCollapsed; collapsibleContent.style.display = isCollapsed ? "none" : "block"; chevron.textContent = isCollapsed ? "▶" : "▼"; headerBar.style.marginBottom = isCollapsed ? "0" : "8px"; headerBar.title = `Click to ${isCollapsed ? 'expand' : 'collapse'} Key Set Manager`; localStorage.setItem(collapsedKey, isCollapsed ? "true" : "false");
-                });
+                 collapsibleContent.id = `keyswitcher-content-${provider.secret_key}`; collapsibleContent.style.display = isCollapsed ? "none" : "block"; collapsibleContent.style.transition = "opacity 0.3s ease-out"; collapsibleContent.style.overflow = "hidden";
+                headerBar.addEventListener("click", () => { isCollapsed = !isCollapsed; collapsibleContent.style.display = isCollapsed ? "none" : "block"; chevron.textContent = isCollapsed ? "▶" : "▼"; headerBar.style.marginBottom = isCollapsed ? "0" : "8px"; headerBar.title = `Click to ${isCollapsed ? 'expand' : 'collapse'} Key Set Manager`; localStorage.setItem(collapsedKey, isCollapsed ? "true" : "false"); });
 
-                // --- Info Panel --- (Remains the same)
                 const infoPanel = document.createElement("div");
-                infoPanel.id = `keyswitcher-info-${provider.secret_key}`;
-                infoPanel.style.marginBottom = "10px"; infoPanel.style.padding = "8px"; infoPanel.style.border = "1px dashed #666"; infoPanel.style.borderRadius = "4px";
+                 infoPanel.id = `keyswitcher-info-${provider.secret_key}`; infoPanel.style.marginBottom = "10px"; infoPanel.style.padding = "8px"; infoPanel.style.border = "1px dashed #666"; infoPanel.style.borderRadius = "4px";
                 const activeSetDiv = document.createElement("div"); activeSetDiv.id = `active_set_info_${provider.secret_key}`; activeSetDiv.textContent = "Active Set: Loading..."; infoPanel.appendChild(activeSetDiv);
-                const currentKeyDiv = document.createElement("div"); currentKeyDiv.id = `current_key_${provider.secret_key}`; currentKeyDiv.textContent = "Current Key: Loading...";
-                currentKeyDiv.style.maxWidth = "100%"; currentKeyDiv.style.wordBreak = "break-all"; currentKeyDiv.style.display = "block"; currentKeyDiv.style.margin = "4px 0"; currentKeyDiv.style.padding = "2px 6px"; currentKeyDiv.style.borderRadius = "3px"; currentKeyDiv.style.background = "rgba(255, 255, 255, 0.05)"; infoPanel.appendChild(currentKeyDiv);
+                const currentKeyDiv = document.createElement("div"); currentKeyDiv.id = `current_key_${provider.secret_key}`; currentKeyDiv.textContent = "Current Key: Loading..."; currentKeyDiv.style.maxWidth = "100%"; currentKeyDiv.style.wordBreak = "break-all"; currentKeyDiv.style.display = "block"; currentKeyDiv.style.margin = "4px 0"; currentKeyDiv.style.padding = "2px 6px"; currentKeyDiv.style.borderRadius = "3px"; currentKeyDiv.style.background = "rgba(255, 255, 255, 0.05)"; infoPanel.appendChild(currentKeyDiv);
                 const switchStatusDiv = document.createElement("div"); switchStatusDiv.id = `switch_key_${provider.secret_key}`; switchStatusDiv.textContent = "Switching: Loading..."; infoPanel.appendChild(switchStatusDiv);
                 const errorToggleDiv = document.createElement("div"); errorToggleDiv.id = `show_${provider.secret_key}_error`; errorToggleDiv.textContent = "Error Details: Loading..."; infoPanel.appendChild(errorToggleDiv);
-                collapsibleContent.appendChild(infoPanel); // Add info panel
+                collapsibleContent.appendChild(infoPanel);
 
-                // --- Global Button Container --- (Add new button here)
                 const globalButtonContainer = document.createElement("div");
-                globalButtonContainer.classList.add("key-switcher-buttons", "flex-container", "flex");
-                globalButtonContainer.style.marginBottom = "10px"; globalButtonContainer.style.gap = "5px"; globalButtonContainer.style.flexWrap = "wrap";
+                 globalButtonContainer.classList.add("key-switcher-buttons", "flex-container", "flex"); globalButtonContainer.style.marginBottom = "10px"; globalButtonContainer.style.gap = "5px"; globalButtonContainer.style.flexWrap = "wrap";
+                const keySwitchingButton = createButton("Toggle Auto Switching/Removal", async () => { keySwitchingEnabled[provider.secret_key] = !keySwitchingEnabled[provider.secret_key]; localStorage.setItem(`switch_key_${provider.secret_key}`, keySwitchingEnabled[provider.secret_key].toString()); const currentSecrets = await getSecrets() || {}; await updateProviderInfoPanel(provider, loadSetData(provider, currentSecrets)); toastr.info(`${provider.name} Auto Switching/Removal: ${keySwitchingEnabled[provider.secret_key] ? 'ON' : 'OFF'}`); });
+                const rotateManuallyButton = createButton("Rotate Key Now", async () => { console.log(`KeySwitcher: Manual rotation requested for ${provider.name}`); const currentKeyBefore = await secretsFunctions.findSecret(provider.secret_key); await handleKeyRotation(provider.secret_key); const currentKeyAfter = await secretsFunctions.findSecret(provider.secret_key); if (currentKeyBefore !== currentKeyAfter) { toastr.success(`${provider.name}: Manually rotated to next key.`); } else { toastr.info(`${provider.name}: No other keys available in the active set to rotate to.`); } });
+                const errorToggleButton = createButton("Toggle Error Details Popup", async () => { showErrorDetails[provider.secret_key] = !showErrorDetails[provider.secret_key]; localStorage.setItem(`show_${provider.secret_key}_error`, showErrorDetails[provider.secret_key].toString()); const currentSecrets = await getSecrets() || {}; await updateProviderInfoPanel(provider, loadSetData(provider, currentSecrets)); toastr.info(`${provider.name} Error Details Popup: ${showErrorDetails[provider.secret_key] ? 'ON' : 'OFF'}`); });
+                const manageErrorsButton = createButton("Manage Error Actions", () => { const errorSection = document.getElementById(`keyswitcher-error-actions-${provider.secret_key}`); if (errorSection) { const isHidden = errorSection.style.display === 'none'; errorSection.style.display = isHidden ? 'block' : 'none'; if (isHidden) { errorSection.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } } else { console.error(`KeySwitcher: Error actions section not found for ${provider.name}`); } });
+                 manageErrorsButton.id = `manage_errors_button_${provider.secret_key}`;
+                globalButtonContainer.appendChild(keySwitchingButton); globalButtonContainer.appendChild(rotateManuallyButton); globalButtonContainer.appendChild(errorToggleButton); globalButtonContainer.appendChild(manageErrorsButton); collapsibleContent.appendChild(globalButtonContainer);
 
-                const keySwitchingButton = createButton("Toggle Auto Switching/Removal", async () => { /* ...unchanged... */ keySwitchingEnabled[provider.secret_key] = !keySwitchingEnabled[provider.secret_key]; localStorage.setItem(`switch_key_${provider.secret_key}`, keySwitchingEnabled[provider.secret_key].toString()); const currentSecrets = await getSecrets() || {}; await updateProviderInfoPanel(provider, loadSetData(provider, currentSecrets)); toastr.info(`${provider.name} Auto Switching/Removal: ${keySwitchingEnabled[provider.secret_key] ? 'ON' : 'OFF'}`); });
-                const rotateManuallyButton = createButton("Rotate Key Now", async () => { /* ...unchanged... */ console.log(`KeySwitcher: Manual rotation requested for ${provider.name}`); const currentKeyBefore = await secretsFunctions.findSecret(provider.secret_key); await handleKeyRotation(provider.secret_key); const currentKeyAfter = await secretsFunctions.findSecret(provider.secret_key); if (currentKeyBefore !== currentKeyAfter) { toastr.success(`${provider.name}: Manually rotated to next key.`); } else { toastr.info(`${provider.name}: No other keys available in the active set to rotate to.`); } });
-                const errorToggleButton = createButton("Toggle Error Details Popup", async () => { /* ...unchanged... */ showErrorDetails[provider.secret_key] = !showErrorDetails[provider.secret_key]; localStorage.setItem(`show_${provider.secret_key}_error`, showErrorDetails[provider.secret_key].toString()); const currentSecrets = await getSecrets() || {}; await updateProviderInfoPanel(provider, loadSetData(provider, currentSecrets)); toastr.info(`${provider.name} Error Details Popup: ${showErrorDetails[provider.secret_key] ? 'ON' : 'OFF'}`); });
-
-                // --- NEW "Manage Error Actions" Button ---
-                const manageErrorsButton = createButton("Manage Error Actions", () => {
-                    const errorSection = document.getElementById(`keyswitcher-error-actions-${provider.secret_key}`);
-                    if (errorSection) {
-                        const isHidden = errorSection.style.display === 'none';
-                        errorSection.style.display = isHidden ? 'block' : 'none'; // Toggle visibility
-                        // Optional: scroll into view if revealing
-                        if (isHidden) {
-                            errorSection.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-                        }
-                    } else {
-                        console.error(`KeySwitcher: Error actions section not found for ${provider.name}`);
-                    }
-                });
-                manageErrorsButton.id = `manage_errors_button_${provider.secret_key}`; // Add ID
-
-                globalButtonContainer.appendChild(keySwitchingButton);
-                globalButtonContainer.appendChild(rotateManuallyButton);
-                globalButtonContainer.appendChild(errorToggleButton);
-                globalButtonContainer.appendChild(manageErrorsButton); // Add the new button
-                collapsibleContent.appendChild(globalButtonContainer); // Add button container
-
-                // --- START: Create Error Code Actions UI Section (Initially Hidden) ---
                 const errorActionsSection = document.createElement("div");
-                errorActionsSection.id = `keyswitcher-error-actions-${provider.secret_key}`;
-                errorActionsSection.style.marginTop = "10px"; // Space below buttons
-                errorActionsSection.style.border = "1px solid #668";
-                errorActionsSection.style.borderRadius = "4px";
-                errorActionsSection.style.padding = "10px";
-                errorActionsSection.style.display = "none"; // **** HIDDEN BY DEFAULT ****
-
+                 errorActionsSection.id = `keyswitcher-error-actions-${provider.secret_key}`; errorActionsSection.style.marginTop = "10px"; errorActionsSection.style.border = "1px solid #668"; errorActionsSection.style.borderRadius = "4px"; errorActionsSection.style.padding = "10px"; errorActionsSection.style.display = "none";
                 const errorActionsHeader = document.createElement("div");
-                errorActionsHeader.style.fontWeight = "bold";
-                errorActionsHeader.style.marginBottom = "8px";
-                 errorActionsHeader.style.paddingBottom = "5px";
-                 errorActionsHeader.style.borderBottom = "1px solid #557"; // Separator below header
-                errorActionsHeader.textContent = "Automatic Actions on Specific Error Codes";
-                errorActionsSection.appendChild(errorActionsHeader);
-
-                // Content div for the table and help text
-                const errorContent = document.createElement("div");
-                errorContent.id = `keyswitcher-error-content-${provider.secret_key}`;
-                errorActionsSection.appendChild(errorContent);
-
-                // Populate Error Actions Content (Table) - Moved logic here
-                const errorPrefs = loadErrorCodePrefs(provider);
-                const providerErrorMap = PROVIDER_ERROR_MAPPINGS[provider.secret_key];
-                const providerCodes = providerErrorMap ? providerErrorMap.codes : null;
-
-                if (!providerCodes || Object.keys(providerCodes).length === 0) {
-                    errorContent.textContent = "No specific error codes are defined for automatic actions for this provider.";
-                    errorContent.style.fontStyle = "italic";
-                } else {
-                    const table = document.createElement("table");
-                     table.style.width = "100%"; table.style.borderCollapse = "collapse"; table.style.marginTop = "5px";
-                    const thead = table.createTHead();
-                    const headerRow = thead.insertRow();
-                    const thAction = document.createElement("th");
-                     thAction.textContent = "Action"; thAction.style.textAlign = "left"; thAction.style.padding = "4px 8px"; thAction.style.border = "1px solid #555"; thAction.style.background = "#333a40"; headerRow.appendChild(thAction);
-                    const sortedCodes = Object.keys(providerCodes).sort((a, b) => parseInt(a) - parseInt(b));
-                    sortedCodes.forEach(code => {
-                        const thCode = document.createElement("th");
-                         thCode.textContent = code; thCode.title = providerCodes[code]; thCode.style.padding = "4px 8px"; thCode.style.border = "1px solid #555"; thCode.style.background = "#333a40"; thCode.style.minWidth = "40px"; headerRow.appendChild(thCode);
-                    });
-                    const tbody = table.createTBody();
-                    const actions = ['Rotate', 'Remove'];
-                    actions.forEach(actionName => {
-                        const row = tbody.insertRow();
-                        const cellAction = row.insertCell();
-                         cellAction.textContent = actionName; cellAction.style.fontWeight = "bold"; cellAction.style.padding = "4px 8px"; cellAction.style.border = "1px solid #555"; cellAction.style.textAlign = "left";
-                        sortedCodes.forEach(code => {
-                            const cell = row.insertCell();
-                             cell.style.textAlign = "center"; cell.style.border = "1px solid #555"; cell.style.padding = "4px";
-                            const checkbox = document.createElement("input");
-                             checkbox.type = "checkbox"; const actionValue = actionName.toLowerCase(); checkbox.dataset.action = actionValue; checkbox.dataset.code = code; checkbox.title = `${actionName} key automatically on error code ${code}\n(${providerCodes[code]})`;
-                             checkbox.checked = errorPrefs[code] === actionValue;
-                            checkbox.addEventListener('change', async (event) => {
-                                const changedCheckbox = event.target; const currentAction = changedCheckbox.dataset.action; const currentCode = changedCheckbox.dataset.code; const isChecked = changedCheckbox.checked; const currentPrefs = loadErrorCodePrefs(provider);
-                                if (isChecked) {
-                                    currentPrefs[currentCode] = currentAction;
-                                    const otherAction = currentAction === 'rotate' ? 'remove' : 'rotate'; const otherCheckboxSelector = `input[data-action='${otherAction}'][data-code='${currentCode}']`; const otherCheckbox = table.querySelector(otherCheckboxSelector);
-                                    if (otherCheckbox && otherCheckbox.checked) { otherCheckbox.checked = false; }
-                                } else {
-                                    currentPrefs[currentCode] = 'none';
-                                }
-                                saveErrorCodePrefs(provider, currentPrefs);
-                            });
-                            cell.appendChild(checkbox);
-                        });
-                    });
-                    errorContent.appendChild(table); // Add table to content div
-
-                    const helpText = document.createElement("p");
-                     helpText.style.fontSize = "0.9em"; helpText.style.color = "#aaa"; helpText.style.marginTop = "10px"; helpText.style.lineHeight = "1.4";
-                     helpText.innerHTML = `Select the desired automatic action (Rotate Key or Remove Key) for each HTTP status code reported by ${provider.name}. Only one action can be active per code. If neither is checked, no automatic key action will occur for that error, even if 'Toggle Auto Switching/Removal' is enabled. Changes are saved automatically. Hover over error codes for descriptions.`;
-                    errorContent.appendChild(helpText); // Add help text to content div
-                } // End else (providerCodes exist)
-
-                // Append the *entire hidden section* after the buttons
+                 errorActionsHeader.style.fontWeight = "bold"; errorActionsHeader.style.marginBottom = "8px"; errorActionsHeader.style.paddingBottom = "5px"; errorActionsHeader.style.borderBottom = "1px solid #557"; errorActionsHeader.textContent = "Automatic Actions on Specific Error Codes"; errorActionsSection.appendChild(errorActionsHeader);
+                const errorContent = document.createElement("div"); errorContent.id = `keyswitcher-error-content-${provider.secret_key}`; errorActionsSection.appendChild(errorContent);
+                const errorPrefs = loadErrorCodePrefs(provider); const providerErrorMap = PROVIDER_ERROR_MAPPINGS[provider.secret_key]; const providerCodes = providerErrorMap ? providerErrorMap.codes : null;
+                if (!providerCodes || Object.keys(providerCodes).length === 0) { errorContent.textContent = "No specific error codes defined for this provider."; errorContent.style.fontStyle = "italic"; }
+                else { const table = document.createElement("table"); table.style.width = "100%"; table.style.borderCollapse = "collapse"; table.style.marginTop = "5px"; const thead = table.createTHead(); const headerRow = thead.insertRow(); const thAction = document.createElement("th"); thAction.textContent = "Action"; thAction.style.textAlign = "left"; thAction.style.padding = "4px 8px"; thAction.style.border = "1px solid #555"; thAction.style.background = "#333a40"; headerRow.appendChild(thAction); const sortedCodes = Object.keys(providerCodes).sort((a, b) => parseInt(a) - parseInt(b)); sortedCodes.forEach(code => { const thCode = document.createElement("th"); thCode.textContent = code; thCode.title = providerCodes[code]; thCode.style.padding = "4px 8px"; thCode.style.border = "1px solid #555"; thCode.style.background = "#333a40"; thCode.style.minWidth = "40px"; headerRow.appendChild(thCode); }); const tbody = table.createTBody(); const actions = ['Rotate', 'Remove']; actions.forEach(actionName => { const row = tbody.insertRow(); const cellAction = row.insertCell(); cellAction.textContent = actionName; cellAction.style.fontWeight = "bold"; cellAction.style.padding = "4px 8px"; cellAction.style.border = "1px solid #555"; cellAction.style.textAlign = "left"; sortedCodes.forEach(code => { const cell = row.insertCell(); cell.style.textAlign = "center"; cell.style.border = "1px solid #555"; cell.style.padding = "4px"; const checkbox = document.createElement("input"); checkbox.type = "checkbox"; const actionValue = actionName.toLowerCase(); checkbox.dataset.action = actionValue; checkbox.dataset.code = code; checkbox.title = `${actionName} key automatically on error code ${code}\n(${providerCodes[code]})`; checkbox.checked = errorPrefs[code] === actionValue; checkbox.addEventListener('change', async (event) => { const changedCheckbox = event.target; const currentAction = changedCheckbox.dataset.action; const currentCode = changedCheckbox.dataset.code; const isChecked = changedCheckbox.checked; const currentPrefs = loadErrorCodePrefs(provider); if (isChecked) { currentPrefs[currentCode] = currentAction; const otherAction = currentAction === 'rotate' ? 'remove' : 'rotate'; const otherCheckboxSelector = `input[data-action='${otherAction}'][data-code='${currentCode}']`; const otherCheckbox = table.querySelector(otherCheckboxSelector); if (otherCheckbox && otherCheckbox.checked) { otherCheckbox.checked = false; } } else { currentPrefs[currentCode] = 'none'; } saveErrorCodePrefs(provider, currentPrefs); }); cell.appendChild(checkbox); }); }); errorContent.appendChild(table); const helpText = document.createElement("p"); helpText.style.fontSize = "0.9em"; helpText.style.color = "#aaa"; helpText.style.marginTop = "10px"; helpText.style.lineHeight = "1.4"; helpText.innerHTML = `Select the desired automatic action... Hover over error codes for descriptions.`; errorContent.appendChild(helpText); }
                 collapsibleContent.appendChild(errorActionsSection);
-                // --- END: Create Error Code Actions UI Section ---
 
-
-                // --- Dynamic Sets Container (Placeholder for redrawProviderUI) ---
                 const dynamicSetsContainer = document.createElement("div");
-                dynamicSetsContainer.id = `keyswitcher-sets-dynamic-${provider.secret_key}`; // ID used by redrawProviderUI
-                collapsibleContent.appendChild(dynamicSetsContainer); // Add this *after* error section
-
-                // Add the collapsible content to the main container
+                 dynamicSetsContainer.id = `keyswitcher-sets-dynamic-${provider.secret_key}`;
+                collapsibleContent.appendChild(dynamicSetsContainer);
                 topLevelContainer.appendChild(collapsibleContent);
 
-                // --- Inject UI ---
                 console.log(`KeySwitcher: Attempting to inject UI for ${provider.name}`);
-                const insertBeforeElement = formElement.querySelector('.form_section_block, hr:not(.key-switcher-hr), button.menu_button');
-                const separatorHr = document.createElement("hr"); separatorHr.className = "key-switcher-hr";
+                 const insertBeforeElement = formElement.querySelector('.form_section_block, hr:not(.key-switcher-hr), button.menu_button');
+                 const separatorHr = document.createElement("hr"); separatorHr.className = "key-switcher-hr";
                 if (insertBeforeElement) { console.log(`KeySwitcher: Inserting UI before:`, insertBeforeElement); formElement.insertBefore(separatorHr, insertBeforeElement); formElement.insertBefore(topLevelContainer, insertBeforeElement); }
                 else { console.log(`KeySwitcher: No specific insert point found, appending.`); formElement.appendChild(separatorHr); formElement.appendChild(topLevelContainer); }
                 console.log(`KeySwitcher: UI Injected successfully for ${provider.name}`);
 
-                // --- Call initial updates ---
                 await updateProviderInfoPanel(provider, data);
-                await redrawProviderUI(provider, data); // Draw sets/bin into dynamicSetsContainer
+                await redrawProviderUI(provider, data);
 
-            } catch (injectionError) {
+            } catch (injectionError) { // Catch errors during UI creation/injection
                  console.error(`KeySwitcher: *** ERROR during UI creation/injection for ${provider.name}:`, injectionError);
                  toastr.error(`KeySwitcher failed to create UI for ${provider.name}. Check console.`, "UI Error");
             } // --- End Try/Catch for UI creation ---
@@ -1297,13 +1235,12 @@ jQuery(async () => {
     } // --- End of 'for (const provider of Object.values(PROVIDERS))' loop ---
 
     // --- Event Listeners --- (Remain unchanged)
-     scriptFunctions.eventSource.on(scriptFunctions.event_types.CHATCOMPLETION_MODEL_CHANGED, async (model) => {
-         console.log("KeySwitcher: Model changed."); try { const currentSecrets = await getSecrets() || {}; for (const provider of Object.values(PROVIDERS)) { if (isProviderSource(provider)) { console.log(`KeySwitcher: Active source now ${provider.name}. Updating.`); const data = loadSetData(provider, currentSecrets); await updateProviderInfoPanel(provider, data); if (keySwitchingEnabled[provider.secret_key]) { await handleKeyRotation(provider.secret_key); } const contentContainer = document.getElementById(`keyswitcher-content-${provider.secret_key}`); if (!contentContainer || contentContainer.style.display !== 'none') { await redrawProviderUI(provider, data); } break; } } } catch (e) { console.error("KeySwitcher: Error during MODEL_CHANGED:", e); } });
-     scriptFunctions.eventSource.on(scriptFunctions.event_types.CHAT_COMPLETION_SETTINGS_READY, async () => {
-         console.log("KeySwitcher: Settings ready."); try { const currentSecrets = await getSecrets() || {}; for (const provider of Object.values(PROVIDERS)) { if (isProviderSource(provider)) { console.log(`KeySwitcher: Initial source ${provider.name}.`); const data = loadSetData(provider, currentSecrets); const container = document.getElementById(`keyswitcher-main-${provider.secret_key}`); if (container) { await updateProviderInfoPanel(provider, data); await redrawProviderUI(provider, data); if (keySwitchingEnabled[provider.secret_key]) { await handleKeyRotation(provider.secret_key); } else { const activeKey = await secretsFunctions.findSecret(provider.secret_key); const keyDisplay = document.getElementById(`current_key_${provider.secret_key}`); if (keyDisplay && keyDisplay.textContent !== `Current Key: ${activeKey || 'N/A'}`) { keyDisplay.textContent = `Current Key: ${activeKey || 'N/A'}`; } } } else { console.warn(`KeySwitcher: UI container not found for ${provider.name} on SETTINGS_READY.`); } break; } } } catch(e) { console.error("KeySwitcher: Error during SETTINGS_READY:", e); } });
+     scriptFunctions.eventSource.on(scriptFunctions.event_types.CHATCOMPLETION_MODEL_CHANGED, async (model) => { console.log("KeySwitcher: Model changed."); try { const currentSecrets = await getSecrets() || {}; for (const provider of Object.values(PROVIDERS)) { if (isProviderSource(provider)) { console.log(`KeySwitcher: Active source now ${provider.name}. Updating.`); const data = loadSetData(provider, currentSecrets); await updateProviderInfoPanel(provider, data); if (keySwitchingEnabled[provider.secret_key]) { await handleKeyRotation(provider.secret_key); } const contentContainer = document.getElementById(`keyswitcher-content-${provider.secret_key}`); if (!contentContainer || contentContainer.style.display !== 'none') { await redrawProviderUI(provider, data); } break; } } } catch (e) { console.error("KeySwitcher: Error during MODEL_CHANGED:", e); } });
+     scriptFunctions.eventSource.on(scriptFunctions.event_types.CHAT_COMPLETION_SETTINGS_READY, async () => { console.log("KeySwitcher: Settings ready."); try { const currentSecrets = await getSecrets() || {}; for (const provider of Object.values(PROVIDERS)) { if (isProviderSource(provider)) { console.log(`KeySwitcher: Initial source ${provider.name}.`); const data = loadSetData(provider, currentSecrets); const container = document.getElementById(`keyswitcher-main-${provider.secret_key}`); if (container) { await updateProviderInfoPanel(provider, data); await redrawProviderUI(provider, data); if (keySwitchingEnabled[provider.secret_key]) { await handleKeyRotation(provider.secret_key); } else { const activeKey = await secretsFunctions.findSecret(provider.secret_key); const keyDisplay = document.getElementById(`current_key_${provider.secret_key}`); if (keyDisplay && keyDisplay.textContent !== `Current Key: ${activeKey || 'N/A'}`) { keyDisplay.textContent = `Current Key: ${activeKey || 'N/A'}`; } } } else { console.warn(`KeySwitcher: UI container not found for ${provider.name} on SETTINGS_READY.`); } break; } } } catch(e) { console.error("KeySwitcher: Error during SETTINGS_READY:", e); } });
 
     console.log("MultiProviderKeySwitcher: Initialization complete.");
 }); // --- END of jQuery(async () => { ... }) ---
+
 
 
 
