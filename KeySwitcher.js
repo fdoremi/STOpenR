@@ -1012,10 +1012,10 @@ async function redrawProviderUI(provider, data) {
 jQuery(async () => {
     console.log("MultiProviderKeySwitcher: Initializing...");
 
-    // Override toastr.error to intercept API errors and handle key switching/removal
+        // Override toastr.error to intercept API errors and handle key switching/removal
     const originalToastrError = toastr.error;
     toastr.error = async function(...args) {
-        originalToastrError(...args);
+        originalToastrError(...args); // Show original toast first
         console.log("KeySwitcher: Toastr Error Args:", args);
         const [errorMessage, errorTitle] = args;
         for (const provider of Object.values(PROVIDERS)) {
@@ -1024,34 +1024,76 @@ jQuery(async () => {
                 let keyRemoved = false;
                 let removedKeyValue = null;
                 const failedKey = await secretsFunctions.findSecret(provider.secret_key);
+
+                // Check if switching is enabled AND a key was actually found
                 if (failedKey && keySwitchingEnabled[provider.secret_key]) {
+
+                    // --- START: New Logic using Error Code Preferences ---
+                    // Only parse status code ONCE here
                     const statusCodeMatch = errorMessage.match(/\b(\d{3})\b/);
                     let statusCode = null;
-                    if (statusCodeMatch) statusCode = parseInt(statusCodeMatch[1], 10);
-                    // -- Use OLD logic for now --
-                    const isRemovalStatusCode = statusCode && REMOVAL_STATUS_CODES.includes(statusCode);
-                    const isRemovalMessage = REMOVAL_MESSAGE_REGEX.test(errorMessage);
-                    if (isRemovalStatusCode || isRemovalMessage) {
-                        console.log(`KeySwitcher: Removal trigger matched for ${provider.name} (Status: ${statusCode}, MessageMatch: ${isRemovalMessage}). Attempting removal...`);
-                        let removalReason = "Unknown";
-                        try {
-                            const jsonMatch = errorMessage.match(/({.*})/);
-                            if (jsonMatch && jsonMatch[1]) { const parsed = JSON.parse(jsonMatch[1]); if (parsed?.error?.message) { removalReason = `${statusCode ? statusCode + ': ' : ''}${parsed.error.message}`; } else { removalReason = `${statusCode ? statusCode + ': ' : ''}` + errorMessage.split('\n')[0].slice(0, 120); } } else { removalReason = `${statusCode ? statusCode + ': ' : ''}` + errorMessage.split('\n')[0].slice(0, 120); }
-                        } catch { removalReason = `${statusCode ? statusCode + ': ' : ''}` + errorMessage.split('\n')[0].slice(0, 120); }
-                        const newKey = await handleKeyRemoval(provider, failedKey, removalReason);
-                        if (newKey !== null) { keyRemoved = true; removedKeyValue = failedKey; console.log(`KeySwitcher: Key ${failedKey} supposedly removed, new key is '${newKey || "None"}'`); }
-                        else { console.log(`KeySwitcher: handleKeyRemoval returned null (or failed), key ${failedKey} not removed.`); }
-                    } else {
-                        console.log(`KeySwitcher: Error for ${provider.name} (Switching ON) did not match removal triggers. Rotating...`);
-                        await handleKeyRotation(provider.secret_key);
+                    if (statusCodeMatch) {
+                        statusCode = parseInt(statusCodeMatch[1], 10);
                     }
-                } else if (failedKey) { console.log(`KeySwitcher: Error for ${provider.name} occurred, but Key Switching is OFF.`); }
-                else { console.log(`KeySwitcher: Error for ${provider.name} occurred, but no failed key found in secret.`); }
-                if (showErrorDetails[provider.secret_key]) { showErrorPopup(provider, errorMessage, errorTitle || `${provider.name} API Error`, keyRemoved, removedKeyValue); }
-                 break;
+
+                    if (statusCode) {
+                        // Get the user-configured action for this specific status code
+                        const action = getErrorCodeAction(provider, statusCode);
+                        console.log(`KeySwitcher: Status code ${statusCode} detected. Configured action: '${action}'`);
+
+                        if (action === 'remove') {
+                            console.log(`KeySwitcher: Attempting key removal based on action '${action}' for status code ${statusCode}.`);
+                            let removalReason = `Status code ${statusCode}`;
+                            try {
+                                const jsonMatch = errorMessage.match(/({.*})/);
+                                if (jsonMatch && jsonMatch[1]) {
+                                    const parsed = JSON.parse(jsonMatch[1]);
+                                    if (parsed?.error?.message) {
+                                        removalReason = `${statusCode}: ${parsed.error.message.slice(0, 100)}`;
+                                    }
+                                }
+                            } catch {}
+                            const newKey = await handleKeyRemoval(provider, failedKey, removalReason);
+                            if (newKey !== null) {
+                                keyRemoved = true;
+                                removedKeyValue = failedKey;
+                                console.log(`KeySwitcher: Key removal successful for ${statusCode}. New key: '${newKey || "None"}'.`);
+                                toastr.warning(`KeySwitcher removed failing key for ${provider.name} (ending ${failedKey.slice(-4)}) due to error ${statusCode}. ${newKey ? 'Activated next key.' : 'No more keys in set!'}`);
+                            } else {
+                                console.log(`KeySwitcher: handleKeyRemoval returned null/failed for status code ${statusCode}.`);
+                                toastr.error(`KeySwitcher: Configured action 'remove' for error ${statusCode} failed for ${provider.name}. Key not removed.`);
+                            }
+                        } else if (action === 'rotate') {
+                            console.log(`KeySwitcher: Attempting key rotation based on action '${action}' for status code ${statusCode}.`);
+                            await handleKeyRotation(provider.secret_key);
+                             toastr.info(`KeySwitcher: Rotated key for ${provider.name} due to error ${statusCode} based on settings.`);
+                        } else {
+                            // Action is 'none'
+                            console.log(`KeySwitcher: Configured action is 'none' for status code ${statusCode}. No automatic key action taken.`);
+                        }
+                    } else {
+                        // Status code could not be parsed from the error message
+                        console.log(`KeySwitcher: No status code found in error message. No key action taken based on error code preferences.`);
+                        // No fallback action if code not found
+                    }
+                    // --- END: New Logic ---
+
+                } else if (failedKey) {
+                    console.log(`KeySwitcher: Error for ${provider.name} occurred, but Key Switching is OFF.`);
+                } else {
+                    console.log(`KeySwitcher: Error for ${provider.name} occurred, but no failed key found in secret.`);
+                }
+
+                // Show detailed error popup if enabled
+                if (showErrorDetails[provider.secret_key]) {
+                     showErrorPopup(provider, errorMessage, errorTitle || `${provider.name} API Error`, keyRemoved, removedKeyValue);
+                }
+
+                 break; // Handled the active provider, stop iterating
             }
         }
     }; // End of toastr.error override
+
 
     const loadedSecrets = await getSecrets();
     if (!loadedSecrets) { console.error("KeySwitcher: Failed to load secrets on initial load. UI setup aborted."); toastr.error("KeySwitcher: Failed to load secrets.", "Init Error"); return; }
