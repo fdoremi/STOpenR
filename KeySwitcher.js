@@ -196,12 +196,12 @@ function loadErrorCodePrefs(provider) {
         }
     }
 
-    // Ensure all known error codes for this provider have a default ('none') if not already set
+    // Ensure all known error codes for this provider have a default ('rotate') if not already set
     const providerCodes = PROVIDER_ERROR_MAPPINGS[provider.secret_key]?.codes || {};
     for (const code in providerCodes) {
         if (!(code in prefs) || !['rotate', 'remove', 'none'].includes(prefs[code])) {
-             // If the code is missing or has an invalid value, set default to 'none'
-            prefs[code] = 'none';
+             // If the code is missing or has an invalid value, set default to 'rotate'
+            prefs[code] = 'rotate'; // MODIFIED: Default to 'rotate'
         }
     }
     // console.log(`KeySwitcher: Loaded error prefs for ${provider.name}:`, prefs); // Optional: for debugging
