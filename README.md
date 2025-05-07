@@ -28,17 +28,26 @@ OpenRouter, Anthropic (Claude), OpenAI, Google AI Studio (Gemini), DeepSeek, Xai
 2.  Enable the downloaded extension.
 3.  Restart SillyTavern & Reload UI.
 
-## Usage
+## Basic Usage
 
 1.  Go to API Connections > select provider.
 2.  Ensure `allowKeysExposure` is `true` in your config.
 3.  Find the "**Key Set Manager**" section below the main settings.
-4.  If wanted, use ***Add New Set*** to create a new set, and then name it. If not, click within ***Default*** textbox.  
-4.  Add alternate keys (one per line/; separated) to chosen set.
-5.  Click ***Activate Set** to make wanted set active. Only one set may be active at a time. 
-6.  Click ***Delete Set** to remove desired set.
-7.  Use "**Toggle Switching**" to enable auto-rotation/removal for that provider. Keys can currently only be rotated when toggle is set on. 
+4.  If wanted, use **Add New Set** to create a new set, and then name it. If not, click within ***Default*** textbox.  
+5.  Add alternate keys (one per line/; separated) to chosen set.
+6.  Click **Activate Set** to make wanted set active. Only one set may be active at a time. 
+7.  Click **Delete Set** to remove desired set.
+8.  Use "**Toggle Switching**" to enable auto-rotation/removal for that provider. Keys can currently only be rotated when toggle is set on. By default, keys are set to rotate on error. Removal can be added by changing settings in **Manage Error Actions**.
 
+## Advanced Usage
+
+1. Click **Manage Error Actions** to expand the error code settings menu.
+2. For each listed error code (e.g., 400, 401, 429, etc), you can choose either:
+  *   **Rotate:** If this error occurs, the current key will be kept, and the system will switch to the next key in the active set for the *next* attempt.
+  *   **Remove:** If this error occurs, the current key will be considered invalid and moved to the Recycle Bin. The system will then switch to the next available key in the active set.
+  *   **(None - uncheck both):** If this error occurs, no automatic key switching or removal action will be taken.
+3. If an error code is set to remove keys upon trigger, then when triggered, it will be removed from the active set and enter the **Recycle Bin**.
+4. In the **Recycle Bin**, keys will have their reason for removal listed, along with the timestamp of when removal occured. Keys can then be either restored to their original Set, or permananemtly deleted from the **Recycle Bin**.
 ---
 
 *Manage keys responsibly.*
